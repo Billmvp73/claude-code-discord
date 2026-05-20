@@ -4,6 +4,22 @@ import type { AskUserQuestionInput, AskUserCallback } from "./user-question.ts";
 import type { PermissionRequestCallback } from "./permission-request.ts";
 import * as path from "https://deno.land/std@0.208.0/path/mod.ts";
 
+// Bedrock alias defaults — used when CLAUDE_CODE_USE_BEDROCK=1 and no model is configured.
+// Kept in sync with BEDROCK_MODELS in enhanced-client.ts.
+const BEDROCK_ALIAS_DEFAULTS: Record<string, string> = {
+  "opus":   "global.anthropic.claude-opus-4-6-v1[1m]",
+  "sonnet": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "haiku":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+};
+
+// Resolve a model alias/name to its actual ID.
+// On Bedrock, bare aliases (opus/sonnet/haiku) must be expanded to full IDs.
+// On Anthropic API the CLI resolves them natively, so return unchanged.
+function resolveBedrockModel(model: string): string {
+  if (Deno.env.get("CLAUDE_CODE_USE_BEDROCK") !== "1") return model;
+  return BEDROCK_ALIAS_DEFAULTS[model] ?? model;
+}
+
 // Load MCP server configs from .claude/mcp.json
 async function loadMcpServers(workDir: string): Promise<Record<string, McpServerConfig> | undefined> {
   try {
@@ -192,8 +208,15 @@ export async function sendToClaudeCode(
   // Wrap with comprehensive error handling
   const executeWithErrorHandling = async (overrideModel?: string) => {
     try {
-      // Determine which model to use
-      const modelToUse = overrideModel || modelOptions?.model;
+      // Determine which model to use.
+      // On Bedrock, always resolve to a full model ID — bare aliases like "haiku"
+      // are not accepted by the Bedrock endpoint. Also default to "opus" when no
+      // model is configured so the SDK doesn't inherit a broken alias from the
+      // user's global ~/.claude/settings.json (which may pin an ID unavailable
+      // on their Bedrock account).
+      const useBedrock = Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1";
+      const rawModel = overrideModel || modelOptions?.model || (useBedrock ? "opus" : undefined);
+      const modelToUse = rawModel ? resolveBedrockModel(rawModel) : undefined;
       
       // Determine permission mode (defaults to dontAsk for Discord — denies anything not pre-approved)
       const permMode = modelOptions?.permissionMode || "dontAsk";
@@ -206,6 +229,13 @@ export async function sendToClaudeCode(
         // Enable experimental Agent Teams if configured
         ...(modelOptions?.enableAgentTeams && { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' }),
       };
+
+      // Remove CLAUDECODE env var — the Claude CLI refuses to start if it detects
+      // it's being launched inside an existing Claude Code session. When the bot
+      // itself runs inside a Claude Code session (e.g. during development), this
+      // variable leaks through Deno.env.toObject() and causes every SDK subprocess
+      // to exit with code 1.
+      delete envVars["CLAUDECODE"];
       
       // Apply extra env vars (proxy settings, etc.)
       if (modelOptions?.extraEnv) {

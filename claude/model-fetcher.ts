@@ -133,6 +133,7 @@ function buildAliases(models: Record<string, ModelInfo>, apiModels: AnthropicMod
  * Returns null if no API key is set or the request fails.
  */
 async function fetchFromAPI(): Promise<AnthropicModelEntry[] | null> {
+  if (Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1") return null;
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) {
     return null;
