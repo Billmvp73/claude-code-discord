@@ -15,7 +15,7 @@ export interface SessionThreadCallbacks {
    * @param sessionId Optional pre-existing session ID (reuses thread if one exists)
    * @returns Object with the thread-bound sender and a placeholder session key
    */
-  createThreadSender(prompt: string, sessionId?: string, threadName?: string): Promise<{
+  createThreadSender(prompt: string, sessionId?: string, threadName?: string, onThreadIdKnown?: (threadId: string) => void): Promise<{
     sender: (messages: ClaudeMessage[]) => Promise<void>;
     threadSessionKey: string;
     threadChannelId: string;
@@ -206,7 +206,15 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       if (deps.sessionThreads) {
         try {
-          const threadResult = await deps.sessionThreads.createThreadSender(prompt, undefined, threadName);
+          const threadResult = await deps.sessionThreads.createThreadSender(
+            prompt,
+            undefined,
+            threadName,
+            // Mark the channel pending as soon as the Discord thread ID is known —
+            // before the summary embed or any other await inside createThreadSender.
+            // This closes the window where onFreeFormMessage could abort this run.
+            (threadId) => deps.markChannelPending?.(threadId),
+          );
           activeSender = threadResult.sender;
           threadSessionKey = threadResult.threadSessionKey;
           threadChannelId = threadResult.threadChannelId;
@@ -214,10 +222,6 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           console.warn('[SessionThread] Could not create thread, falling back to main channel:', err);
         }
       }
-
-      // Mark the thread channel as pending immediately after threadChannelId is known.
-      // This prevents onFreeFormMessage from aborting this run while editReply or SDK are awaited.
-      if (threadChannelId) deps.markChannelPending?.(threadChannelId);
 
       let result: ClaudeResponse;
       try {
