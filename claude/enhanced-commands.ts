@@ -1,5 +1,5 @@
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
-import { CLAUDE_MODELS, CLAUDE_TEMPLATES, type ModelInfo } from "./enhanced-client.ts";
+import { CLAUDE_MODELS, CLAUDE_TEMPLATES, resolveModelId, type ModelInfo } from "./enhanced-client.ts";
 
 export const enhancedClaudeCommands = [
   new SlashCommandBuilder()
@@ -159,7 +159,7 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
           enhancedPrompt,
           {
             workDir,
-            model: model || runtimeOpts.model,
+            model: model ? resolveModelId(model) : runtimeOpts.model,
             includeSystemInfo: !!includeSystemInfo,
             includeGitContext: !!includeGitContext,
             contextFiles: contextFilesList,

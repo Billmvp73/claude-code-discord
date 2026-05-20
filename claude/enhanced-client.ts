@@ -441,7 +441,7 @@ export let CLAUDE_MODELS: Record<string, ModelInfo> = {
 };
 
 // Bedrock cross-region inference profile IDs (us.* prefix by default).
-// Users in other regions can override via /quick-model with eu.* or apac.* IDs.
+// Users in other regions can override via /quick-model with eu.* or ap.* IDs.
 export const BEDROCK_MODELS: Record<string, ModelInfo> = {
   // === Aliases ===
   'opus': {
