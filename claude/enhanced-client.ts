@@ -473,15 +473,6 @@ export const BEDROCK_MODELS: Record<string, ModelInfo> = {
   },
 
   // === Opus Family ===
-  // [1m] suffix is the Claude Code 1M-context variant; omit for standard 200k accounts.
-  'global.anthropic.claude-opus-4-6-v1[1m]': {
-    name: 'Claude Opus 4.6 1M (Bedrock)',
-    description: 'Latest flagship — 1M context, global Bedrock inference',
-    contextWindow: 1000000,
-    recommended: false,
-    supportsThinking: true,
-    tier: 'flagship'
-  },
   'global.anthropic.claude-opus-4-6-v1': {
     name: 'Claude Opus 4.6 (Bedrock)',
     description: 'Latest flagship — standard context, global Bedrock inference',
