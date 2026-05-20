@@ -375,6 +375,15 @@ export async function createDiscordBot(
 
     const ctx = createInteractionContext(interaction);
 
+    // Block all Claude-starting buttons while any /claude-thread run is pending.
+    // Pagination buttons don't touch the controller, so they bypass.
+    const BUTTON_PENDING_BYPASS = new Set(['pagination:']);
+    const isPaginationButton = BUTTON_PENDING_BYPASS.has(interaction.customId.split(':')[0] + ':');
+    if (!isPaginationButton && dependencies.isAnyChannelPending?.()) {
+      await ctx.reply({ content: '⌛ A Claude session is already starting. Please wait for it to finish.', ephemeral: true });
+      return;
+    }
+
     // Handle pagination buttons first
     if (interaction.customId.startsWith('pagination:')) {
       try {
@@ -421,10 +430,6 @@ export async function createDiscordBot(
 
     // Handle continue with session ID pattern: "continue:sessionId"
     if (buttonId.startsWith('continue:')) {
-      if (dependencies.isAnyChannelPending?.()) {
-        await ctx.reply({ content: '⌛ A Claude session is already starting. Please wait for it to finish.', ephemeral: true });
-        return;
-      }
       if (dependencies.onContinueSession) {
         try {
           await dependencies.onContinueSession(ctx);

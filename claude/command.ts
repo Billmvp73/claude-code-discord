@@ -199,6 +199,12 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       const controller = new AbortController();
       deps.setClaudeController(controller);
 
+      // Mark the invoking channel as pending BEFORE the first await so that
+      // free-form messages and other commands see isAnyChannelPending() === true
+      // immediately, even during ctx.deferReply() and thread creation.
+      const provisionalChannelId = ctx.getChannelId?.() as string | undefined;
+      if (provisionalChannelId) deps.markChannelPending?.(provisionalChannelId);
+
       await ctx.deferReply();
 
       // Create a dedicated thread for this session
@@ -206,8 +212,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       let threadSessionKey: string | undefined;
       let threadChannelId: string | undefined;
 
-      // Capture the thread ID from the callback so we can clear the pending
-      // marker if createThreadSender rejects after having called the callback.
+      // Real thread ID — set via callback as soon as Discord creates it.
       let markedPendingThreadId: string | undefined;
 
       if (deps.sessionThreads) {
@@ -216,12 +221,15 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             prompt,
             undefined,
             threadName,
-            // Called as soon as the Discord thread ID is known — before any
-            // further awaits inside createThreadSender (e.g. summary embed).
-            // This closes the full window where onFreeFormMessage could abort this run.
+            // Transfer pending from invoking channel to real thread ID, so
+            // after the thread exists, isChannelPending works on the thread ID too.
             (threadId) => {
               markedPendingThreadId = threadId;
               deps.markChannelPending?.(threadId);
+              // Clear provisional now that we have the real thread ID.
+              if (provisionalChannelId && provisionalChannelId !== threadId) {
+                deps.clearChannelPending?.(provisionalChannelId);
+              }
             },
           );
           activeSender = threadResult.sender;
@@ -229,7 +237,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           threadChannelId = threadResult.threadChannelId;
         } catch (err) {
           console.warn('[SessionThread] Could not create thread, falling back to main channel:', err);
-          // Clear any pending marker we set before the failure.
+          // Clear real thread marker if set before failure; provisional cleared in finally.
           if (markedPendingThreadId) deps.clearChannelPending?.(markedPendingThreadId);
         }
       }
@@ -264,8 +272,10 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           deps.getQueryOptions?.()
         );
       } finally {
-        // Clear pending regardless of success, error, or abort.
+        // Clear all pending markers regardless of success, error, or abort.
         if (threadChannelId) deps.clearChannelPending?.(threadChannelId);
+        // Clear provisional in case the callback never fired (no sessionThreads or early error).
+        if (provisionalChannelId) deps.clearChannelPending?.(provisionalChannelId);
       }
 
       const stillOwner = deps.getClaudeController() === controller;
