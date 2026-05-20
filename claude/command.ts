@@ -98,6 +98,12 @@ export interface ClaudeHandlerDeps {
   sessionThreads?: SessionThreadCallbacks;
   /** Create a sender bound to an arbitrary channel/thread (for free-form message routing) */
   createSenderForChannel?: (channel: TextBasedChannel) => (messages: ClaudeMessage[]) => Promise<void>;
+  /** Mark a channel as having an in-flight run (no session yet) */
+  markChannelPending?: (channelId: string) => void;
+  /** Clear the in-flight marker when the run completes or errors */
+  clearChannelPending?: (channelId: string) => void;
+  /** Check whether a channel has an in-flight run */
+  isChannelPending?: (channelId: string) => boolean;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
@@ -209,33 +215,43 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         }
       }
 
-      await ctx.editReply({
-        embeds: [{
-          color: 0xffff00,
-          title: 'Claude Code Running...',
-          description: threadSessionKey
-            ? 'Session started in a dedicated thread — check below ↓'
-            : 'Starting new session...',
-          fields: [{ name: 'Prompt', value: `\`${prompt.substring(0, 1020)}\``, inline: false }],
-          timestamp: true
-        }]
-      });
+      // Mark the thread channel as pending immediately after threadChannelId is known.
+      // This prevents onFreeFormMessage from aborting this run while editReply or SDK are awaited.
+      if (threadChannelId) deps.markChannelPending?.(threadChannelId);
 
-      const result = await sendToClaudeCode(
-        workDir,
-        prompt,
-        controller,
-        undefined, // always a new session
-        undefined,
-        (jsonData) => {
-          const claudeMessages = convertToClaudeMessages(jsonData);
-          if (claudeMessages.length > 0) {
-            activeSender(claudeMessages).catch(() => {});
-          }
-        },
-        false,
-        deps.getQueryOptions?.()
-      );
+      let result: ClaudeResponse;
+      try {
+        await ctx.editReply({
+          embeds: [{
+            color: 0xffff00,
+            title: 'Claude Code Running...',
+            description: threadSessionKey
+              ? 'Session started in a dedicated thread — check below ↓'
+              : 'Starting new session...',
+            fields: [{ name: 'Prompt', value: `\`${prompt.substring(0, 1020)}\``, inline: false }],
+            timestamp: true
+          }]
+        });
+
+        result = await sendToClaudeCode(
+          workDir,
+          prompt,
+          controller,
+          undefined, // always a new session
+          undefined,
+          (jsonData) => {
+            const claudeMessages = convertToClaudeMessages(jsonData);
+            if (claudeMessages.length > 0) {
+              activeSender(claudeMessages).catch(() => {});
+            }
+          },
+          false,
+          deps.getQueryOptions?.()
+        );
+      } finally {
+        // Clear pending regardless of success, error, or abort.
+        if (threadChannelId) deps.clearChannelPending?.(threadChannelId);
+      }
 
       const stillOwner = deps.getClaudeController() === controller;
       if (stillOwner) {
@@ -335,6 +351,12 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
     async onFreeFormMessage(message: Message): Promise<void> {
       const channelId = message.channelId;
       const prompt = message.content;
+
+      // If a /claude-thread run is in-flight for this channel, don't abort it.
+      if (deps.isChannelPending?.(channelId)) {
+        message.react("⌛").catch(() => {});
+        return;
+      }
 
       // Read existing session BEFORE installing new controller — synchronous, no interleaving.
       const existingSessionId = deps.getSessionForChannel(channelId);

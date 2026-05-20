@@ -515,6 +515,8 @@ export function createAllHandlers(
 
   // Per-channel session tracking — maps channelId/threadId to active sessionId
   const channelSessionMap = new Map<string, string>();
+  // Channels with in-flight runs that have no session ID yet (e.g. /claude-thread pre-completion)
+  const pendingChannels = new Set<string>();
 
   const claudeHandlers = createClaudeHandlers({
     workDir,
@@ -534,6 +536,9 @@ export function createAllHandlers(
     getQueryOptions,
     sessionThreads: deps.sessionThreads,
     createSenderForChannel: deps.createSenderForChannel,
+    markChannelPending: (channelId) => pendingChannels.add(channelId),
+    clearChannelPending: (channelId) => pendingChannels.delete(channelId),
+    isChannelPending: (channelId) => pendingChannels.has(channelId),
   });
 
   const gitHandlers = createGitHandlers({
