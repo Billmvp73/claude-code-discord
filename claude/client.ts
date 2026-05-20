@@ -7,7 +7,7 @@ import * as path from "https://deno.land/std@0.208.0/path/mod.ts";
 // Bedrock alias defaults — used when CLAUDE_CODE_USE_BEDROCK=1 and no model is configured.
 // Kept in sync with BEDROCK_MODELS in enhanced-client.ts.
 const BEDROCK_ALIAS_DEFAULTS: Record<string, string> = {
-  "opus":   "global.anthropic.claude-opus-4-6-v1[1m]",
+  "opus":   "global.anthropic.claude-opus-4-6-v1",
   "sonnet": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "haiku":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 };
