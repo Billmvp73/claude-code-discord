@@ -274,9 +274,10 @@ export function createAdvancedSettingsHandlers(deps: SettingsHandlerDeps) {
     async onQuickModel(ctx: any, model: string) {
       try {
         const selectedModel = CLAUDE_MODELS[model as keyof typeof CLAUDE_MODELS];
-        // Also accept Bedrock cross-region inference profile IDs (us.*, eu.*, ap.*, global.*)
-        // that are not in the static CLAUDE_MODELS map — the SDK validates them at runtime.
-        const isBedrockProfile = /^(us|eu|ap|global)\.anthropic\./i.test(model);
+        // Also accept any Bedrock cross-region inference profile ID (any lowercase geo prefix
+        // followed by .anthropic.) — e.g. us.*, eu.*, ap.*, au.*, jp.*, global.*
+        // The SDK validates the exact profile ID at runtime; we just avoid false rejections.
+        const isBedrockProfile = /^[a-z]+\.anthropic\./i.test(model);
         if (!selectedModel && !isBedrockProfile) {
           const modelList = Object.entries(CLAUDE_MODELS)
             .map(([key, m]) => `\`${key}\` — ${m.name}${m.recommended ? ' ⭐' : ''}`)
