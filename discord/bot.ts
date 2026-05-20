@@ -278,7 +278,8 @@ export async function createDiscordBot(
     // claude-cancel and shutdown are allowed through as explicit cancellation paths.
     // claude-cancel / shutdown = explicit cancellation paths
     // claude-control = mid-session controls (interrupt, status, set-model, etc.) for the active run
-    const PENDING_BYPASS = new Set(['claude-cancel', 'shutdown', 'claude-control']);
+    // mcp = active-query MCP server controls (toggle, reconnect) needed during a long run
+    const PENDING_BYPASS = new Set(['claude-cancel', 'shutdown', 'claude-control', 'mcp']);
     if (
       !PENDING_BYPASS.has(interaction.commandName) &&
       dependencies.isAnyChannelPending?.()
