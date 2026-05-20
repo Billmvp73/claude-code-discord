@@ -4,20 +4,30 @@ import type { AskUserQuestionInput, AskUserCallback } from "./user-question.ts";
 import type { PermissionRequestCallback } from "./permission-request.ts";
 import * as path from "https://deno.land/std@0.208.0/path/mod.ts";
 
-// Bedrock alias defaults — used when CLAUDE_CODE_USE_BEDROCK=1 and no model is configured.
+// Model ID mapping for Bedrock mode.
+// Maps bare aliases AND known Anthropic full IDs to Bedrock inference profile IDs.
 // Kept in sync with BEDROCK_MODELS in enhanced-client.ts.
-const BEDROCK_ALIAS_DEFAULTS: Record<string, string> = {
+const BEDROCK_MODEL_MAP: Record<string, string> = {
+  // Bare aliases
   "opus":   "global.anthropic.claude-opus-4-6-v1",
   "sonnet": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "haiku":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+  // Anthropic API full IDs → nearest Bedrock equivalents
+  "claude-opus-4-5-20251101":          "global.anthropic.claude-opus-4-6-v1",
+  "claude-opus-4-1-20250805":          "global.anthropic.claude-opus-4-6-v1",
+  "claude-opus-4-20250514":            "global.anthropic.claude-opus-4-6-v1",
+  "claude-sonnet-4-5-20250929":        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "claude-sonnet-4-20250514":          "us.anthropic.claude-sonnet-4-20250514-v1:0",
+  "claude-haiku-4-5-20251001":         "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "claude-3-5-sonnet-20241022":        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "claude-3-5-haiku-20241022":         "us.anthropic.claude-haiku-4-5-20251001-v1:0",
 };
 
-// Resolve a model alias/name to its actual ID.
-// On Bedrock, bare aliases (opus/sonnet/haiku) must be expanded to full IDs.
-// On Anthropic API the CLI resolves them natively, so return unchanged.
+// Resolve a model ID for Bedrock: maps bare aliases and known Anthropic IDs to
+// Bedrock cross-region inference profile IDs. No-op for non-Bedrock or already-valid IDs.
 function resolveBedrockModel(model: string): string {
   if (Deno.env.get("CLAUDE_CODE_USE_BEDROCK") !== "1") return model;
-  return BEDROCK_ALIAS_DEFAULTS[model] ?? model;
+  return BEDROCK_MODEL_MAP[model] ?? model;
 }
 
 // Load MCP server configs from .claude/mcp.json
