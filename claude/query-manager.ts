@@ -109,16 +109,28 @@ export async function interruptActiveQuery(): Promise<boolean> {
 
 /**
  * Change the model on the active query mid-session.
+ * On Bedrock, bare aliases and Anthropic full IDs are mapped to Bedrock profile IDs.
  */
 export async function setActiveModel(model?: string): Promise<boolean> {
   if (!activeQuery) return false;
   try {
-    await activeQuery.setModel(model);
+    const resolved = model && Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1"
+      ? (BEDROCK_MID_SESSION_MAP[model] ?? model)
+      : model;
+    await activeQuery.setModel(resolved);
     return true;
   } catch {
     return false;
   }
 }
+
+// Minimal alias map for mid-session model switches under Bedrock.
+// Kept in sync with BEDROCK_MODEL_MAP in client.ts.
+const BEDROCK_MID_SESSION_MAP: Record<string, string> = {
+  "opus":   "global.anthropic.claude-opus-4-6-v1",
+  "sonnet": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+  "haiku":  "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+};
 
 /**
  * Change the permission mode on the active query mid-session.

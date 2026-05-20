@@ -225,7 +225,7 @@ export async function sendToClaudeCode(
       // user's global ~/.claude/settings.json (which may pin an ID unavailable
       // on their Bedrock account).
       const useBedrock = Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1";
-      const rawModel = overrideModel || modelOptions?.model || (useBedrock ? "opus" : undefined);
+      const rawModel = overrideModel || modelOptions?.model;
       const modelToUse = rawModel ? resolveBedrockModel(rawModel) : undefined;
       
       // Determine permission mode (defaults to dontAsk for Discord — denies anything not pre-approved)
@@ -279,8 +279,10 @@ export async function sendToClaudeCode(
           ...(cleanedSessionId && !continueMode && { resume: cleanedSessionId }),
           ...(modelToUse && { model: modelToUse }),
           ...(modelOptions?.maxTurns && { maxTurns: modelOptions.maxTurns }),
-          ...(modelOptions?.fallbackModel && { fallbackModel: modelOptions.fallbackModel }),
-          // Native SDK agent support
+          ...(modelOptions?.fallbackModel && { fallbackModel: resolveBedrockModel(modelOptions.fallbackModel) }),
+          // Native SDK agent support — SDK resolves agent model aliases (opus/sonnet/haiku)
+          // internally; agent.model is typed as a constrained union and cannot take full
+          // Bedrock profile IDs, so we leave it for the SDK to handle.
           ...(modelOptions?.agents && { agents: modelOptions.agents }),
           ...(modelOptions?.agent && { agent: modelOptions.agent }),
           // Advanced features: betas, file checkpointing, sandbox, additional dirs, fork
