@@ -204,22 +204,31 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       let threadSessionKey: string | undefined;
       let threadChannelId: string | undefined;
 
+      // Capture the thread ID from the callback so we can clear the pending
+      // marker if createThreadSender rejects after having called the callback.
+      let markedPendingThreadId: string | undefined;
+
       if (deps.sessionThreads) {
         try {
           const threadResult = await deps.sessionThreads.createThreadSender(
             prompt,
             undefined,
             threadName,
-            // Mark the channel pending as soon as the Discord thread ID is known —
-            // before the summary embed or any other await inside createThreadSender.
-            // This closes the window where onFreeFormMessage could abort this run.
-            (threadId) => deps.markChannelPending?.(threadId),
+            // Called as soon as the Discord thread ID is known — before any
+            // further awaits inside createThreadSender (e.g. summary embed).
+            // This closes the full window where onFreeFormMessage could abort this run.
+            (threadId) => {
+              markedPendingThreadId = threadId;
+              deps.markChannelPending?.(threadId);
+            },
           );
           activeSender = threadResult.sender;
           threadSessionKey = threadResult.threadSessionKey;
           threadChannelId = threadResult.threadChannelId;
         } catch (err) {
           console.warn('[SessionThread] Could not create thread, falling back to main channel:', err);
+          // Clear any pending marker we set before the failure.
+          if (markedPendingThreadId) deps.clearChannelPending?.(markedPendingThreadId);
         }
       }
 
