@@ -13,12 +13,7 @@ export const enhancedClaudeCommands = [
       option.setName('model')
         .setDescription('Claude model to use')
         .setRequired(false)
-        .addChoices(
-          ...Object.entries(CLAUDE_MODELS).map(([value, model]) => ({
-            name: model.name,
-            value: value
-          }))
-        ))
+        .setAutocomplete(true))
     .addStringOption(option =>
       option.setName('template')
         .setDescription('Use a predefined template')
