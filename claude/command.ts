@@ -299,6 +299,16 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
      */
     // deno-lint-ignore no-explicit-any
     async onContinue(ctx: any, prompt?: string): Promise<ClaudeResponse> {
+      // Block if a /claude-thread run is in-flight for this channel.
+      const channelId = ctx.getChannelId?.();
+      if (channelId && deps.isChannelPending?.(channelId)) {
+        await ctx.deferReply();
+        await ctx.editReply({
+          embeds: [{ color: 0xffa500, title: '⌛ Session in progress', description: 'A Claude session is already starting in this thread. Please wait for it to finish before sending another command.', timestamp: true }]
+        });
+        return { response: '', sessionId: undefined };
+      }
+
       const existingController = deps.getClaudeController();
       if (existingController) {
         existingController.abort();
