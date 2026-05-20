@@ -205,45 +205,43 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       const provisionalChannelId = ctx.getChannelId?.() as string | undefined;
       if (provisionalChannelId) deps.markChannelPending?.(provisionalChannelId);
 
-      await ctx.deferReply();
-
       // Create a dedicated thread for this session
       let activeSender = sendClaudeMessages;
       let threadSessionKey: string | undefined;
       let threadChannelId: string | undefined;
-
-      // Real thread ID — set via callback as soon as Discord creates it.
       let markedPendingThreadId: string | undefined;
-
-      if (deps.sessionThreads) {
-        try {
-          const threadResult = await deps.sessionThreads.createThreadSender(
-            prompt,
-            undefined,
-            threadName,
-            // Transfer pending from invoking channel to real thread ID, so
-            // after the thread exists, isChannelPending works on the thread ID too.
-            (threadId) => {
-              markedPendingThreadId = threadId;
-              deps.markChannelPending?.(threadId);
-              // Clear provisional now that we have the real thread ID.
-              if (provisionalChannelId && provisionalChannelId !== threadId) {
-                deps.clearChannelPending?.(provisionalChannelId);
-              }
-            },
-          );
-          activeSender = threadResult.sender;
-          threadSessionKey = threadResult.threadSessionKey;
-          threadChannelId = threadResult.threadChannelId;
-        } catch (err) {
-          console.warn('[SessionThread] Could not create thread, falling back to main channel:', err);
-          // Clear real thread marker if set before failure; provisional cleared in finally.
-          if (markedPendingThreadId) deps.clearChannelPending?.(markedPendingThreadId);
-        }
-      }
-
       let result: ClaudeResponse;
+
+      // Single try/finally covers every await after markChannelPending, including
+      // deferReply — so the pending marker is always cleared even if deferReply throws.
       try {
+        await ctx.deferReply();
+
+        if (deps.sessionThreads) {
+          try {
+            const threadResult = await deps.sessionThreads.createThreadSender(
+              prompt,
+              undefined,
+              threadName,
+              // Transfer pending from invoking channel to real thread ID.
+              (threadId) => {
+                markedPendingThreadId = threadId;
+                deps.markChannelPending?.(threadId);
+                // Clear provisional once the real thread ID is known.
+                if (provisionalChannelId && provisionalChannelId !== threadId) {
+                  deps.clearChannelPending?.(provisionalChannelId);
+                }
+              },
+            );
+            activeSender = threadResult.sender;
+            threadSessionKey = threadResult.threadSessionKey;
+            threadChannelId = threadResult.threadChannelId;
+          } catch (err) {
+            console.warn('[SessionThread] Could not create thread, falling back to main channel:', err);
+            if (markedPendingThreadId) deps.clearChannelPending?.(markedPendingThreadId);
+          }
+        }
+
         await ctx.editReply({
           embeds: [{
             color: 0xffff00,
@@ -274,7 +272,6 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       } finally {
         // Clear all pending markers regardless of success, error, or abort.
         if (threadChannelId) deps.clearChannelPending?.(threadChannelId);
-        // Clear provisional in case the callback never fired (no sessionThreads or early error).
         if (provisionalChannelId) deps.clearChannelPending?.(provisionalChannelId);
       }
 
