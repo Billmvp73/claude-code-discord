@@ -276,7 +276,9 @@ export async function createDiscordBot(
     // Block commands that would abort an in-flight /claude-thread run.
     // Guard matches the global controller scope — any pending run blocks all channels.
     // claude-cancel and shutdown are allowed through as explicit cancellation paths.
-    const PENDING_BYPASS = new Set(['claude-cancel', 'shutdown']);
+    // claude-cancel / shutdown = explicit cancellation paths
+    // claude-control = mid-session controls (interrupt, status, set-model, etc.) for the active run
+    const PENDING_BYPASS = new Set(['claude-cancel', 'shutdown', 'claude-control']);
     if (
       !PENDING_BYPASS.has(interaction.commandName) &&
       dependencies.isAnyChannelPending?.()
