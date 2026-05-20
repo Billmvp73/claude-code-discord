@@ -539,6 +539,7 @@ export function createAllHandlers(
     markChannelPending: (channelId) => pendingChannels.add(channelId),
     clearChannelPending: (channelId) => pendingChannels.delete(channelId),
     isChannelPending: (channelId) => pendingChannels.has(channelId),
+    isAnyChannelPending: () => pendingChannels.size > 0,
   });
 
   const gitHandlers = createGitHandlers({

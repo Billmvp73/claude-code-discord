@@ -315,6 +315,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
     },
     onFreeFormMessage,
     isChannelPending: (channelId: string) => allHandlers.claude.isChannelPending(channelId),
+    isAnyChannelPending: () => allHandlers.claude.isAnyChannelPending(),
     ...(monitorChannelId && monitorBotIds?.length && {
       monitorConfig: {
         channelId: monitorChannelId,

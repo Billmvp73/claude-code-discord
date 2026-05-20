@@ -104,6 +104,8 @@ export interface ClaudeHandlerDeps {
   clearChannelPending?: (channelId: string) => void;
   /** Check whether a channel has an in-flight run */
   isChannelPending?: (channelId: string) => boolean;
+  /** Check whether ANY channel has an in-flight run (global scope, matches the singleton controller) */
+  isAnyChannelPending?: () => boolean;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
@@ -365,8 +367,8 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       const channelId = message.channelId;
       const prompt = message.content;
 
-      // If a /claude-thread run is in-flight for this channel, don't abort it.
-      if (deps.isChannelPending?.(channelId)) {
+      // If any /claude-thread run is in-flight (global controller scope), don't abort it.
+      if (deps.isAnyChannelPending?.()) {
         message.react("⌛").catch(() => {});
         return;
       }
@@ -431,6 +433,10 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
     /** Expose pending check so index.ts can pass it into BotDependencies */
     isChannelPending(channelId: string): boolean {
       return deps.isChannelPending?.(channelId) ?? false;
+    },
+    /** True if ANY channel has an in-flight /claude-thread run — guards the global controller */
+    isAnyChannelPending(): boolean {
+      return deps.isAnyChannelPending?.() ?? false;
     },
 
     // deno-lint-ignore no-explicit-any

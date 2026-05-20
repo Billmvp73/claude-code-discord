@@ -131,4 +131,6 @@ export interface BotDependencies {
   onFreeFormMessage?: (message: Message) => Promise<void>;
   /** Check whether a channel has an in-flight /claude-thread run with no session yet */
   isChannelPending?: (channelId: string) => boolean;
+  /** Check whether ANY channel has an in-flight /claude-thread run (global, matches singleton controller) */
+  isAnyChannelPending?: () => boolean;
 }

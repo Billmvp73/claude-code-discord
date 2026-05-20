@@ -273,12 +273,13 @@ export async function createDiscordBot(
     const allowed = await checkCommandPermission(interaction.commandName, ctx);
     if (!allowed) return;
 
-    // Block commands that would abort an in-flight /claude-thread run in this channel.
-    // claude-cancel and shutdown are allowed through — they are explicit cancellation paths.
+    // Block commands that would abort an in-flight /claude-thread run.
+    // Guard matches the global controller scope — any pending run blocks all channels.
+    // claude-cancel and shutdown are allowed through as explicit cancellation paths.
     const PENDING_BYPASS = new Set(['claude-cancel', 'shutdown']);
     if (
       !PENDING_BYPASS.has(interaction.commandName) &&
-      dependencies.isChannelPending?.(interaction.channelId)
+      dependencies.isAnyChannelPending?.()
     ) {
       await ctx.reply({
         content: '⌛ A Claude session is already starting in this channel. Please wait for it to finish, or use `/claude-cancel` to stop it.',
@@ -420,6 +421,10 @@ export async function createDiscordBot(
 
     // Handle continue with session ID pattern: "continue:sessionId"
     if (buttonId.startsWith('continue:')) {
+      if (dependencies.isAnyChannelPending?.()) {
+        await ctx.reply({ content: '⌛ A Claude session is already starting. Please wait for it to finish.', ephemeral: true });
+        return;
+      }
       if (dependencies.onContinueSession) {
         try {
           await dependencies.onContinueSession(ctx);
