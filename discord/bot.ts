@@ -331,7 +331,17 @@ export async function createDiscordBot(
     if (focused.name === 'action') {
       choices = SETTINGS_ACTIONS[category] ?? [];
     } else if (focused.name === 'value') {
-      choices = SETTINGS_VALUES[action] ?? [];
+      // For set-model: serve the live CLAUDE_MODELS map so Bedrock deployments
+      // see Bedrock profile IDs after initModels() swaps the map, not the
+      // frozen Anthropic IDs captured at module-import time in SETTINGS_VALUES.
+      if (action === 'set-model') {
+        choices = Object.entries(CLAUDE_MODELS).map(([key, model]) => ({
+          name: `${key} — ${model.name}`,
+          value: key,
+        }));
+      } else {
+        choices = SETTINGS_VALUES[action] ?? [];
+      }
     }
 
     // Filter by what the user has typed so far

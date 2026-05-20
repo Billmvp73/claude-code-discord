@@ -1,5 +1,5 @@
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
-import { CLAUDE_MODELS, CLAUDE_TEMPLATES } from "./enhanced-client.ts";
+import { CLAUDE_MODELS, CLAUDE_TEMPLATES, resolveModelId } from "./enhanced-client.ts";
 
 export const additionalClaudeCommands = [
   new SlashCommandBuilder()
@@ -240,7 +240,7 @@ export function createAdditionalClaudeHandlers(deps: AdditionalClaudeHandlerDeps
           prompt,
           {
             workDir,
-            model: settings.defaultModel,
+            model: resolveModelId(settings.defaultModel),
             includeSystemInfo: false,
             includeGitContext: false,
             ...getRuntimeOpts(),
@@ -302,7 +302,7 @@ export function createAdditionalClaudeHandlers(deps: AdditionalClaudeHandlerDeps
           prompt,
           {
             workDir,
-            model: settings.defaultModel,
+            model: resolveModelId(settings.defaultModel),
             includeSystemInfo: settings.autoIncludeSystemInfo,
             includeGitContext: settings.autoIncludeGitContext,
             contextFiles: contextFilesList,
@@ -365,7 +365,7 @@ export function createAdditionalClaudeHandlers(deps: AdditionalClaudeHandlerDeps
           prompt,
           {
             workDir,
-            model: settings.defaultModel,
+            model: resolveModelId(settings.defaultModel),
             includeSystemInfo: false,
             includeGitContext: settings.autoIncludeGitContext,
             ...getRuntimeOpts(),
@@ -439,7 +439,7 @@ export function createAdditionalClaudeHandlers(deps: AdditionalClaudeHandlerDeps
           prompt,
           {
             workDir,
-            model: settings.defaultModel,
+            model: resolveModelId(settings.defaultModel),
             includeSystemInfo: false,
             includeGitContext: settings.autoIncludeGitContext,
             contextFiles,
@@ -498,7 +498,7 @@ export function createAdditionalClaudeHandlers(deps: AdditionalClaudeHandlerDeps
           prompt,
           {
             workDir,
-            model: settings.defaultModel,
+            model: resolveModelId(settings.defaultModel),
             includeSystemInfo: settings.autoIncludeSystemInfo,
             includeGitContext: settings.autoIncludeGitContext,
             ...getRuntimeOpts(),
@@ -565,7 +565,7 @@ export function createAdditionalClaudeHandlers(deps: AdditionalClaudeHandlerDeps
           prompt,
           {
             workDir,
-            model: settings.defaultModel,
+            model: resolveModelId(settings.defaultModel),
             includeSystemInfo: false,
             includeGitContext: settings.autoIncludeGitContext,
             ...getRuntimeOpts(),
@@ -628,7 +628,7 @@ export function createAdditionalClaudeHandlers(deps: AdditionalClaudeHandlerDeps
           prompt,
           {
             workDir,
-            model: settings.defaultModel,
+            model: resolveModelId(settings.defaultModel),
             includeSystemInfo: false,
             includeGitContext: false,
             ...getRuntimeOpts(),
