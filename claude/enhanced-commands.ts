@@ -241,13 +241,18 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
       try {
         switch (action) {
           case 'list': {
-            const sessions = await readSdkSessions();
+            const projectCwd = deps.resolveCwdForChannel?.(
+              ctx.getChannelId?.() ?? '',
+              ctx.getParentChannelId?.() ?? undefined
+            ) ?? workDir;
+            const allSessions = await readSdkSessions();
+            const sessions = allSessions.filter((s: SdkSession) => s.cwd === projectCwd);
             if (sessions.length === 0) {
               await ctx.reply({
                 embeds: [{
                   color: 0xffaa00,
                   title: '📋 Claude Sessions',
-                  description: 'No active sessions found.',
+                  description: `No active sessions found for \`${basename(projectCwd)}\`.`,
                   timestamp: true
                 }],
                 ephemeral: true
@@ -264,9 +269,9 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
             await ctx.reply({
               embeds: [{
                 color: 0x00ff00,
-                title: '📋 Active Claude Sessions',
+                title: `📋 Claude Sessions — ${basename(projectCwd)}`,
                 description: sessionsList,
-                footer: { text: `Total: ${sessions.length} sessions` },
+                footer: { text: `${sessions.length} session(s) in ${projectCwd}` },
                 timestamp: true
               }],
               ephemeral: true
