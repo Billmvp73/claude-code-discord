@@ -217,7 +217,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       let threadSessionKey: string | undefined;
       let threadChannelId: string | undefined;
       let markedPendingThreadId: string | undefined;
-      let result: ClaudeResponse;
+      let result: ClaudeResponse | undefined;
 
       // Single try/finally covers every await after markChannelPending, including
       // deferReply — so the pending marker is always cleared even if deferReply throws.
@@ -252,14 +252,9 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           }
         }
 
-        // Abort check after thread creation — if canceled, remove the placeholder from
-        // SessionThreadManager so it can't hijack AskUser/permission routing for later runs.
-        if (controller.signal.aborted) {
-          if (threadSessionKey && deps.sessionThreads) {
-            deps.sessionThreads.removeSessionThread?.(threadSessionKey);
-          }
-          throw new Error("Aborted after thread creation");
-        }
+        // Abort check after thread creation — bail early; finally block will clean up
+        // the placeholder from SessionThreadManager if no sessionId was produced.
+        if (controller.signal.aborted) throw new Error("Aborted after thread creation");
 
         await ctx.editReply({
           embeds: [{
@@ -292,6 +287,13 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         // Clear markers owned by this controller only — stale finalizers won't touch newer runs.
         if (threadChannelId) deps.clearChannelPending?.(threadChannelId, controller);
         if (provisionalChannelId) deps.clearChannelPending?.(provisionalChannelId, controller);
+
+        // If the run ended without a real sessionId (abort, error, cancel during SDK),
+        // remove the placeholder from SessionThreadManager so it can't hijack
+        // AskUser/permission routing for later runs.
+        if (threadSessionKey && !result?.sessionId && deps.sessionThreads) {
+          deps.sessionThreads.removeSessionThread?.(threadSessionKey);
+        }
       }
 
       const stillOwner = deps.getClaudeController() === controller;
