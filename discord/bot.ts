@@ -261,12 +261,14 @@ export async function createDiscordBot(
 
   // Helper: check if an interaction belongs to our bot channel or a thread inside it
   function isOurChannel(channelId: string): boolean {
-    if (!myChannel) return false;
-    if (channelId === myChannel.id) return true;
-    // Check if the interaction is inside a thread whose parent is our channel
     const channel = client.channels.cache.get(channelId);
-    // deno-lint-ignore no-explicit-any
-    return !!(channel && (channel as any).parentId === myChannel.id);
+    if (!channel) return false;
+    // Accept any guild text channel or thread the bot can see (excludes DMs, stage channels, etc.)
+    return channel.type === ChannelType.GuildText
+      || channel.type === ChannelType.PublicThread
+      || channel.type === ChannelType.PrivateThread
+      || channel.type === ChannelType.AnnouncementThread
+      || channel.type === ChannelType.GuildAnnouncement;
   }
 
   // Command handler - completely generic
