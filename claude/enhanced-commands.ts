@@ -246,7 +246,10 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
               ctx.getParentChannelId?.() ?? undefined
             ) ?? workDir;
             const allSessions = await readSdkSessions();
-            const sessions = allSessions.filter((s: SdkSession) => s.cwd === projectCwd);
+            // Match the project root and any subdirectory/worktree beneath it
+            const sessions = allSessions.filter((s: SdkSession) =>
+              s.cwd === projectCwd || s.cwd.startsWith(projectCwd + "/")
+            );
             if (sessions.length === 0) {
               await ctx.reply({
                 embeds: [{

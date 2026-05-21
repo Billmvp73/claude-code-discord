@@ -615,7 +615,7 @@ export interface SdkSession {
   sessionId: string;
   name: string;
   cwd: string;
-  status: 'busy' | 'idle';
+  status: 'busy' | 'idle' | string;  // older SDK versions may omit or use different values
   startedAt: number;   // ms epoch
   updatedAt: number;   // ms epoch
   version: string;
@@ -638,10 +638,7 @@ export async function readSdkSessions(): Promise<SdkSession[]> {
         if (
           typeof parsed.sessionId === "string" && parsed.sessionId &&
           Number.isSafeInteger(parsed.pid) && parsed.pid > 0 &&
-          typeof parsed.cwd === "string" &&
-          (parsed.status === "busy" || parsed.status === "idle") &&
-          typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt) && parsed.startedAt > 0 &&
-          typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt) && parsed.updatedAt > 0
+          typeof parsed.cwd === "string" && parsed.cwd
         ) {
           sessions.push({ ...parsed, _filePath: filePath } as SdkSession);
         }
