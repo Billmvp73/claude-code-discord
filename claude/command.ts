@@ -470,7 +470,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         cwd,
         actualPrompt,
         controller,
-        undefined,
+        currentSessionId, // pass explicit session ID so SDK finds the right conversation
         undefined,
         (jsonData) => {
           const claudeMessages = convertToClaudeMessages(jsonData);

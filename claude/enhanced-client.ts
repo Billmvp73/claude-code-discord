@@ -655,29 +655,87 @@ export interface HistorySession {
   lastTimestamp: number;  // ms epoch
 }
 
-/** Look up the original cwd for a session ID from history.jsonl. Returns undefined if not found. */
+/**
+ * Look up the original cwd for a session ID by scanning ~/.claude/projects/.
+ * The SDK stores conversations under ~/.claude/projects/<encoded-path>/<sessionId>.jsonl
+ * where <encoded-path> encodes the filesystem path (/ → -, /. → --).
+ * We find which project dir contains the session file, then decode it back by matching
+ * against real git worktrees (handles directory names with hyphens that would otherwise
+ * be ambiguous). Falls back to history.jsonl project field if worktree matching fails.
+ * Returns undefined if not found.
+ */
 export async function getSessionCwd(sessionId: string): Promise<string | undefined> {
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
-  if (!home) return undefined;
-  const historyPath = `${home}/.claude/history.jsonl`;
-  let found: { project: string; ts: number } | undefined;
+  if (!home) {
+    console.warn("[getSessionCwd] HOME not set, cannot locate session");
+    return undefined;
+  }
+  const projectsDir = `${home}/.claude/projects`;
+
+  // Step 1: find the encoded project dir containing this session
+  let encodedDir: string | undefined;
   try {
-    const raw = await Deno.readTextFile(historyPath);
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
+    for await (const entry of Deno.readDir(projectsDir)) {
+      if (!entry.isDirectory) continue;
       try {
-        const entry = JSON.parse(trimmed);
-        if (entry.sessionId === sessionId && typeof entry.project === "string" && entry.project) {
-          const ts = typeof entry.timestamp === "number" ? entry.timestamp : 0;
-          if (!found || ts > found.ts) {
-            found = { project: entry.project, ts };
-          }
-        }
-      } catch { /* skip */ }
+        await Deno.stat(`${projectsDir}/${entry.name}/${sessionId}.jsonl`);
+        encodedDir = entry.name;
+        break;
+      } catch { /* not in this dir */ }
     }
-  } catch { /* history file missing */ }
-  return found?.project;
+  } catch { /* projects dir missing */ }
+
+  if (!encodedDir) return undefined;
+
+  // Step 2: decode the encoded dir name back to a real filesystem path.
+  // Encoding: / → -, /. (hidden dir) → --
+  // Split on -- to get segments; first segment is the base path, rest are hidden-dir suffixes.
+  const parts = encodedDir.split("--");
+  const basePath = parts[0].replace(/-/g, "/");
+
+  if (parts.length === 1) {
+    // No hidden dir suffix — base path is the cwd
+    return (await dirExists(basePath)) ? basePath : undefined;
+  }
+
+  // Step 3: for paths with hidden dirs (e.g. .claude/worktrees/...), use git worktree list
+  // to find the real path, since directory names may contain hyphens that clash with encoding.
+  const suffix = parts.slice(1).join("--"); // e.g. "claude-worktrees-sockmark-enforcer"
+  try {
+    const cmd = new Deno.Command("git", {
+      args: ["-C", basePath, "worktree", "list", "--porcelain"],
+      stdout: "piped", stderr: "piped",
+    });
+    const output = await cmd.output();
+    if (output.code === 0) {
+      const lines = new TextDecoder().decode(output.stdout).split("\n");
+      for (const line of lines) {
+        if (!line.startsWith("worktree ")) continue;
+        const wt = line.slice(9);
+        // Encode the relative path from basePath and compare to suffix
+        const rel = wt.startsWith(basePath) ? wt.slice(basePath.length).replace(/^\//, "") : null;
+        if (!rel) continue;
+        // Encode: leading . segments use --, rest use -
+        const encoded = rel.replace(/\/\./g, "--").replace(/\//g, "-").replace(/^\./,  "");
+        if (encoded === suffix) return wt;
+      }
+    }
+  } catch { /* git not available or not a repo */ }
+
+  // Step 4: fallback — try a naive decode (works when no hyphens in dir names)
+  const naiveSuffix = suffix.replace(/-/g, "/");
+  const naivePath = `${basePath}/.${naiveSuffix}`;
+  if (await dirExists(naivePath)) return naivePath;
+
+  return undefined;
+}
+
+async function dirExists(path: string): Promise<boolean> {
+  try {
+    return (await Deno.stat(path)).isDirectory;
+  } catch {
+    return false;
+  }
 }
 
 /** Read ~/.claude/history.jsonl and return deduplicated sessions, newest first. */
