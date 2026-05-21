@@ -655,6 +655,31 @@ export interface HistorySession {
   lastTimestamp: number;  // ms epoch
 }
 
+/** Look up the original cwd for a session ID from history.jsonl. Returns undefined if not found. */
+export async function getSessionCwd(sessionId: string): Promise<string | undefined> {
+  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
+  if (!home) return undefined;
+  const historyPath = `${home}/.claude/history.jsonl`;
+  let found: { project: string; ts: number } | undefined;
+  try {
+    const raw = await Deno.readTextFile(historyPath);
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const entry = JSON.parse(trimmed);
+        if (entry.sessionId === sessionId && typeof entry.project === "string" && entry.project) {
+          const ts = typeof entry.timestamp === "number" ? entry.timestamp : 0;
+          if (!found || ts > found.ts) {
+            found = { project: entry.project, ts };
+          }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* history file missing */ }
+  return found?.project;
+}
+
 /** Read ~/.claude/history.jsonl and return deduplicated sessions, newest first. */
 export async function readHistorySessions(): Promise<HistorySession[]> {
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";

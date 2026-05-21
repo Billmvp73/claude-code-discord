@@ -4,6 +4,7 @@ import { convertToClaudeMessages } from "./message-converter.ts";
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
 import type { Message, TextBasedChannel } from "npm:discord.js@14.14.1";
 import { validateProjectPath } from "../project/validate.ts";
+import { getSessionCwd } from "./enhanced-client.ts";
 
 // Callback that creates (or retrieves) a session thread and returns a
 // sender function bound to that thread.
@@ -176,11 +177,16 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         }]
       });
 
-      // Use the session thread's channel id for cwd resolution when resuming.
-      // This ensures cross-channel /claude session_id:X uses the correct project.
-      const cwdChannelId = sessionThreadChannelId ?? channelId;
-      const cwdParentId = sessionThreadChannelId ? undefined : ctx.getParentChannelId?.();
-      const cwd = deps.resolveCwdForChannel(cwdChannelId, cwdParentId);
+      // When resuming by explicit session_id, use that session's original cwd from
+      // history.jsonl so the SDK finds the conversation (it's keyed to the original dir).
+      // For channel-bound sessions fall back to the channel's project binding.
+      let cwd: string;
+      if (activeSessionId) {
+        cwd = (await getSessionCwd(activeSessionId)) ??
+          deps.resolveCwdForChannel(sessionThreadChannelId ?? channelId, sessionThreadChannelId ? undefined : ctx.getParentChannelId?.());
+      } else {
+        cwd = deps.resolveCwdForChannel(channelId, ctx.getParentChannelId?.());
+      }
       const result = await sendToClaudeCode(
         cwd,
         prompt,
@@ -453,9 +459,13 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       await ctx.editReply({ embeds: [embedData] });
 
+      // Use the session's original cwd from history so the SDK finds the conversation.
+      const currentSessionId = deps.getClaudeSessionId();
       const cwdChannelId = sessionThreadChannelId ?? channelId;
       const cwdParentId = sessionThreadChannelId ? undefined : ctx.getParentChannelId?.();
-      const cwd = deps.resolveCwdForChannel(cwdChannelId, cwdParentId);
+      const cwd = currentSessionId
+        ? ((await getSessionCwd(currentSessionId)) ?? deps.resolveCwdForChannel(cwdChannelId, cwdParentId))
+        : deps.resolveCwdForChannel(cwdChannelId, cwdParentId);
       const result = await sendToClaudeCode(
         cwd,
         actualPrompt,
