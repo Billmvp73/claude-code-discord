@@ -98,16 +98,16 @@ export interface ClaudeHandlerDeps {
   sessionThreads?: SessionThreadCallbacks;
   /** Create a sender bound to an arbitrary channel/thread (for free-form message routing) */
   createSenderForChannel?: (channel: TextBasedChannel) => (messages: ClaudeMessage[]) => Promise<void>;
-  /** Mark a channel as having an in-flight run (no session yet) */
-  markChannelPending?: (channelId: string) => void;
-  /** Clear the in-flight marker when the run completes or errors */
-  clearChannelPending?: (channelId: string) => void;
+  /** Mark a channel as having an in-flight run, keyed by controller for ownership */
+  markChannelPending?: (channelId: string, controller: AbortController) => void;
+  /** Clear the in-flight marker only if this controller still owns it */
+  clearChannelPending?: (channelId: string, controller: AbortController) => void;
   /** Check whether a channel has an in-flight run */
   isChannelPending?: (channelId: string) => boolean;
   /** Check whether ANY channel has an in-flight run (global scope, matches the singleton controller) */
   isAnyChannelPending?: () => boolean;
-  /** Clear all pending markers — used by cancel to prevent the guard staying latched */
-  clearAllPending?: () => void;
+  /** Clear all pending markers owned by this controller (used by cancel) */
+  clearAllPending?: (controller: AbortController) => void;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
@@ -205,7 +205,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // free-form messages and other commands see isAnyChannelPending() === true
       // immediately, even during ctx.deferReply() and thread creation.
       const provisionalChannelId = ctx.getChannelId?.() as string | undefined;
-      if (provisionalChannelId) deps.markChannelPending?.(provisionalChannelId);
+      if (provisionalChannelId) deps.markChannelPending?.(provisionalChannelId, controller);
 
       // Create a dedicated thread for this session
       let activeSender = sendClaudeMessages;
@@ -225,13 +225,13 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
               prompt,
               undefined,
               threadName,
-              // Transfer pending from invoking channel to real thread ID.
+              // Transfer pending from invoking channel to real thread ID (same controller).
               (threadId) => {
                 markedPendingThreadId = threadId;
-                deps.markChannelPending?.(threadId);
+                deps.markChannelPending?.(threadId, controller);
                 // Clear provisional once the real thread ID is known.
                 if (provisionalChannelId && provisionalChannelId !== threadId) {
-                  deps.clearChannelPending?.(provisionalChannelId);
+                  deps.clearChannelPending?.(provisionalChannelId, controller);
                 }
               },
             );
@@ -240,7 +240,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             threadChannelId = threadResult.threadChannelId;
           } catch (err) {
             console.warn('[SessionThread] Could not create thread, falling back to main channel:', err);
-            if (markedPendingThreadId) deps.clearChannelPending?.(markedPendingThreadId);
+            if (markedPendingThreadId) deps.clearChannelPending?.(markedPendingThreadId, controller);
           }
         }
 
@@ -272,9 +272,9 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           deps.getQueryOptions?.()
         );
       } finally {
-        // Clear all pending markers regardless of success, error, or abort.
-        if (threadChannelId) deps.clearChannelPending?.(threadChannelId);
-        if (provisionalChannelId) deps.clearChannelPending?.(provisionalChannelId);
+        // Clear markers owned by this controller only — stale finalizers won't touch newer runs.
+        if (threadChannelId) deps.clearChannelPending?.(threadChannelId, controller);
+        if (provisionalChannelId) deps.clearChannelPending?.(provisionalChannelId, controller);
       }
 
       const stillOwner = deps.getClaudeController() === controller;
@@ -459,8 +459,8 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       currentController.abort();
       deps.setClaudeController(null);
       deps.setClaudeSessionId(undefined);
-      // Clear any pending markers so the global guard doesn't stay latched after cancel.
-      deps.clearAllPending?.();
+      // Clear pending markers owned by this controller so the guard doesn't stay latched.
+      deps.clearAllPending?.(currentController);
 
       return true;
     }
