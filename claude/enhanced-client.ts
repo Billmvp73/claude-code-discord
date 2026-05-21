@@ -710,15 +710,34 @@ export async function getSessionCwd(
 
   if (!encodedDir) return undefined;
 
-  // Step 2: collect candidate real paths to test
-  const candidates = new Set<string>();
+  // Step 2: history.jsonl is the most authoritative source — it records the exact
+  // filesystem path for each session. Check it FIRST before trying generic roots/worktrees,
+  // to avoid a generic candidate shadowing the authoritative match when two paths
+  // have the same encoded form (e.g. /tmp/a-b and /tmp/a/b both encode to -tmp-a-b).
+  try {
+    const raw = await Deno.readTextFile(`${home}/.claude/history.jsonl`);
+    let historyMatch: string | undefined;
+    let historyMatchTs = -1;
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e.sessionId === sessionId && typeof e.project === "string" && e.project) {
+          const ts = typeof e.timestamp === "number" ? e.timestamp : 0;
+          if (ts > historyMatchTs) { historyMatch = e.project; historyMatchTs = ts; }
+        }
+      } catch { /* skip */ }
+    }
+    if (historyMatch && encodePathForProjects(historyMatch) === encodedDir) {
+      if (await dirExists(historyMatch)) return historyMatch;
+    }
+  } catch { /* history missing — fall through */ }
 
-  // Add explicitly provided roots
+  // Step 3: fallback — enumerate roots and their git worktrees
+  const candidates = new Set<string>();
   for (const root of candidateRoots) {
     if (root) candidates.add(root);
   }
-
-  // For each root, add its git worktrees
   for (const root of candidateRoots) {
     if (!root) continue;
     try {
@@ -735,24 +754,8 @@ export async function getSessionCwd(
     } catch { /* not a git repo or git unavailable */ }
   }
 
-  // Also add history.jsonl project paths as candidates (cheap and covers non-worktree sessions)
-  try {
-    const raw = await Deno.readTextFile(`${home}/.claude/history.jsonl`);
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        const e = JSON.parse(line);
-        if (e.sessionId === sessionId && typeof e.project === "string" && e.project) {
-          candidates.add(e.project);
-        }
-      } catch { /* skip */ }
-    }
-  } catch { /* history missing */ }
-
-  // Step 3: forward-encode each candidate and compare to encodedDir
   for (const candidate of candidates) {
     if (encodePathForProjects(candidate) === encodedDir) {
-      // Validate it still exists on disk (worktree may have been deleted)
       if (await dirExists(candidate)) return candidate;
     }
   }
