@@ -1,5 +1,6 @@
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
-import { CLAUDE_MODELS, CLAUDE_TEMPLATES, resolveModelId, type ModelInfo } from "./enhanced-client.ts";
+import { CLAUDE_MODELS, CLAUDE_TEMPLATES, resolveModelId, readSdkSessions, type ModelInfo, type SdkSession } from "./enhanced-client.ts";
+import { basename } from "https://deno.land/std@0.208.0/path/mod.ts";
 
 export const enhancedClaudeCommands = [
   new SlashCommandBuilder()
@@ -239,8 +240,8 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
     async onClaudeSessions(ctx: any, action: string, sessionId?: string) {
       try {
         switch (action) {
-          case 'list':
-            const sessions = sessionManager.getAllSessions();
+          case 'list': {
+            const sessions = await readSdkSessions();
             if (sessions.length === 0) {
               await ctx.reply({
                 embeds: [{
@@ -254,10 +255,10 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
               return;
             }
 
-            const sessionsList = sessions.map((session: any) => {
-              const uptime = Date.now() - session.startTime.getTime();
-              const uptimeStr = formatDuration(uptime);
-              return `**${session.id.substring(0, 12)}...**\nMessages: ${session.messageCount} | Cost: $${session.totalCost.toFixed(4)} | Uptime: ${uptimeStr}\nModel: ${session.model}`;
+            const sessionsList = sessions.map((s: SdkSession) => {
+              const statusEmoji = s.status === 'busy' ? '🟢' : '⚪';
+              const ago = formatDuration(Date.now() - s.updatedAt);
+              return `\`${s.sessionId}\`\n**${s.name || 'unnamed'}** | ${basename(s.cwd)} | ${statusEmoji} ${s.status} | updated ${ago} ago`;
             }).join('\n\n');
 
             await ctx.reply({
@@ -271,8 +272,9 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
               ephemeral: true
             });
             break;
+          }
 
-          case 'info':
+          case 'info': {
             if (!sessionId) {
               await ctx.reply({
                 content: 'Session ID is required for info action.',
@@ -281,71 +283,71 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
               return;
             }
 
-            const session = sessionManager.getSession(sessionId);
+            const sessions = await readSdkSessions();
+            const session = sessions.find((s: SdkSession) => s.sessionId === sessionId);
             if (!session) {
               await ctx.reply({
-                content: 'Session not found.',
+                content: 'Session not found. Use `/claude-sessions action:list` to see active sessions.',
                 ephemeral: true
               });
               return;
             }
 
-            const sessionUptime = Date.now() - session.startTime.getTime();
-            const lastActivity = Date.now() - session.lastActivity.getTime();
+            const statusEmoji = session.status === 'busy' ? '🟢' : '⚪';
 
             await ctx.reply({
               embeds: [{
                 color: 0x0099ff,
                 title: '📊 Session Details',
                 fields: [
-                  { name: 'Session ID', value: `\`${session.id}\``, inline: false },
-                  { name: 'Model', value: session.model, inline: true },
-                  { name: 'Messages', value: session.messageCount.toString(), inline: true },
-                  { name: 'Total Cost', value: `$${session.totalCost.toFixed(4)}`, inline: true },
-                  { name: 'Started', value: session.startTime.toLocaleString(), inline: true },
-                  { name: 'Last Activity', value: `${formatDuration(lastActivity)} ago`, inline: true },
-                  { name: 'Uptime', value: formatDuration(sessionUptime), inline: true },
-                  { name: 'Working Directory', value: `\`${session.workDir}\``, inline: false }
+                  { name: 'Session ID', value: `\`${session.sessionId}\``, inline: false },
+                  { name: 'Name', value: session.name || 'unnamed', inline: true },
+                  { name: 'Status', value: `${statusEmoji} ${session.status}`, inline: true },
+                  { name: 'PID', value: session.pid.toString(), inline: true },
+                  { name: 'Working Directory', value: `\`${session.cwd}\``, inline: false },
+                  { name: 'Started', value: new Date(session.startedAt).toLocaleString(), inline: true },
+                  { name: 'Last Updated', value: new Date(session.updatedAt).toLocaleString(), inline: true },
+                  { name: 'Version', value: session.version || 'unknown', inline: true }
                 ],
                 timestamp: true
               }],
               ephemeral: true
             });
             break;
+          }
 
-          case 'delete':
-            if (!sessionId) {
-              await ctx.reply({
-                content: 'Session ID is required for delete action.',
-                ephemeral: true
-              });
-              return;
+          case 'delete': {
+            await ctx.deferReply();
+            await ctx.editReply({ embeds: [{ color: 0x808080, title: 'Session Management', description: 'Session lifecycle is managed by Claude Code — sessions close when their process exits.\nUse `/claude-cancel` to abort a running session.', timestamp: true }] });
+            return;
+          }
+
+          case 'cleanup': {
+            await ctx.deferReply();
+            const sessions = await readSdkSessions();
+            let removed = 0;
+            let skipped = 0;
+            for (const session of sessions) {
+              try {
+                Deno.kill(session.pid, 0);
+                // If we get here without throwing, process is alive — skip
+                skipped++;
+              } catch (err) {
+                if (err instanceof Deno.errors.NotFound) {
+                  // Process is dead — remove stale file
+                  try {
+                    await Deno.remove(session._filePath);
+                    removed++;
+                  } catch { skipped++; }
+                } else {
+                  // PermissionDenied or other — treat as alive/unknown
+                  skipped++;
+                }
+              }
             }
-
-            const deleted = sessionManager.deleteSession(sessionId);
-            await ctx.reply({
-              embeds: [{
-                color: deleted ? 0x00ff00 : 0xff0000,
-                title: deleted ? '✅ Session Deleted' : '❌ Session Not Found',
-                description: deleted ? `Session ${sessionId.substring(0, 12)}... has been deleted.` : 'The specified session was not found.',
-                timestamp: true
-              }],
-              ephemeral: true
-            });
+            await ctx.editReply({ embeds: [{ color: 0x00ff00, title: 'Session Cleanup', description: `Removed ${removed} stale session file(s). Skipped ${skipped} (alive or unknown).`, timestamp: true }] });
             break;
-
-          case 'cleanup':
-            const cleanedCount = sessionManager.cleanup();
-            await ctx.reply({
-              embeds: [{
-                color: 0x00ff00,
-                title: '🧹 Sessions Cleaned Up',
-                description: `Removed ${cleanedCount} old sessions (older than 24 hours).`,
-                timestamp: true
-              }],
-              ephemeral: true
-            });
-            break;
+          }
         }
       } catch (error) {
         await crashHandler.reportCrash('main', error instanceof Error ? error : new Error(String(error)), 'claude-sessions', `Action: ${action}`);

@@ -609,6 +609,48 @@ export function updateModelsFromSDK(sdkModels: SDKModelInfo[]): void {
   }
 }
 
+// Includes the trusted file path from directory traversal — used by cleanup.
+export interface SdkSession {
+  pid: number;
+  sessionId: string;
+  name: string;
+  cwd: string;
+  status: 'busy' | 'idle';
+  startedAt: number;   // ms epoch
+  updatedAt: number;   // ms epoch
+  version: string;
+  _filePath: string;   // internal: absolute path to the JSON file, set by readSdkSessions
+}
+
+export async function readSdkSessions(): Promise<SdkSession[]> {
+  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
+  if (!home) return [];
+  const dir = `${home}/.claude/sessions`;
+  const sessions: SdkSession[] = [];
+  try {
+    for await (const entry of Deno.readDir(dir)) {
+      if (!entry.name.endsWith(".json")) continue;
+      const filePath = `${dir}/${entry.name}`;
+      try {
+        const raw = await Deno.readTextFile(filePath);
+        const parsed = JSON.parse(raw);
+        // Strict validation: pid must be a safe positive integer (safe for Deno.kill)
+        if (
+          typeof parsed.sessionId === "string" && parsed.sessionId &&
+          Number.isSafeInteger(parsed.pid) && parsed.pid > 0 &&
+          typeof parsed.cwd === "string" &&
+          (parsed.status === "busy" || parsed.status === "idle") &&
+          typeof parsed.startedAt === "number" && Number.isFinite(parsed.startedAt) && parsed.startedAt > 0 &&
+          typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt) && parsed.updatedAt > 0
+        ) {
+          sessions.push({ ...parsed, _filePath: filePath } as SdkSession);
+        }
+      } catch { /* skip corrupt or unreadable files */ }
+    }
+  } catch { /* sessions dir missing or unreadable — return empty */ }
+  return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
 // Quick prompt templates for common tasks
 export const CLAUDE_TEMPLATES = {
   debug: "Please help me debug this issue. Analyze the error and provide a solution:",
