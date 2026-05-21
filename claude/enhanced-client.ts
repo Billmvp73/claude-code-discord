@@ -773,21 +773,25 @@ async function dirExists(path: string): Promise<boolean> {
 
 /**
  * Look up a session ID by its human-readable name.
- * The SDK stores the name as a `type:"custom-title"` entry in each session's .jsonl file.
- * Scans all project dirs in ~/.claude/projects/ and checks every session file for a matching name.
- * Returns the most recently updated matching session's ID, or undefined if not found.
- * The match is case-insensitive and substring (so "sockmark" matches "sockmark-enforcer-session-2").
+ * Returns:
+ *   { sessionId, cwd } — exactly one match found
+ *   'ambiguous'        — multiple distinct sessions match (caller should ask user to be specific)
+ *   undefined          — no match found or name too short
+ *
+ * Rules: minimum 3 characters, case-insensitive substring match on customTitle.
+ * If projectCwd is provided, only that project's sessions are searched.
  */
 export async function resolveSessionByName(
   name: string,
   projectCwd?: string,
-): Promise<{ sessionId: string; cwd: string } | undefined> {
+): Promise<{ sessionId: string; cwd: string } | 'ambiguous' | undefined> {
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
-  if (!home || !name.trim()) return undefined;
+  const trimmed = name.trim();
+  if (!home || trimmed.length < 3) return undefined;
   const projectsDir = `${home}/.claude/projects`;
-  const nameLower = name.toLowerCase();
+  const nameLower = trimmed.toLowerCase();
 
-  let best: { sessionId: string; cwd: string; ts: number } | undefined;
+  const matches = new Map<string, { cwd: string; ts: number }>(); // sessionId → best
 
   try {
     for await (const projEntry of Deno.readDir(projectsDir)) {
@@ -817,10 +821,10 @@ export async function resolveSessionByName(
               } catch { /* skip */ }
             }
             if (customTitle && customTitle.toLowerCase().includes(nameLower)) {
-              if (!best || updatedAt > best.ts) {
-                // Decode project dir back to real cwd using the history approach
+              const existing = matches.get(sessionId);
+              if (!existing || updatedAt > existing.ts) {
                 const cwd = await getSessionCwd(sessionId, projectCwd ? [projectCwd] : []);
-                if (cwd) best = { sessionId, cwd, ts: updatedAt };
+                if (cwd) matches.set(sessionId, { cwd, ts: updatedAt });
               }
             }
           } catch { /* skip unreadable session file */ }
@@ -829,7 +833,10 @@ export async function resolveSessionByName(
     }
   } catch { /* projects dir missing */ }
 
-  return best ? { sessionId: best.sessionId, cwd: best.cwd } : undefined;
+  if (matches.size === 0) return undefined;
+  if (matches.size > 1) return 'ambiguous';
+  const [[sessionId, { cwd }]] = matches;
+  return { sessionId, cwd };
 }
 
 /** Read ~/.claude/history.jsonl and return deduplicated sessions, newest first. */

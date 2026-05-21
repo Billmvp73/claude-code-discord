@@ -157,14 +157,23 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // If user passed a name (not a UUID), resolve it to a session ID + cwd
       let resolvedFromName: { sessionId: string; cwd: string } | undefined;
       if (explicitSessionId && !UUID_RE.test(explicitSessionId)) {
-        resolvedFromName = await resolveSessionByName(explicitSessionId, channelCwd);
-        if (!resolvedFromName) {
+        const nameResult = await resolveSessionByName(explicitSessionId, channelCwd);
+        if (!nameResult) {
           await ctx.editReply({
             embeds: [{ color: 0xff0000, title: 'Session Not Found', description: `No session matching name \`${explicitSessionId}\` found in this project.`, timestamp: true }]
           });
-          deps.setClaudeController(null);
+          // Use ownership guard — don't clear a newer run's controller
+          if (deps.getClaudeController() === controller) deps.setClaudeController(null);
           return { response: '', sessionId: undefined };
         }
+        if (nameResult === 'ambiguous') {
+          await ctx.editReply({
+            embeds: [{ color: 0xff0000, title: 'Ambiguous Name', description: `Multiple sessions match \`${explicitSessionId}\`. Use a more specific name or the full session ID.`, timestamp: true }]
+          });
+          if (deps.getClaudeController() === controller) deps.setClaudeController(null);
+          return { response: '', sessionId: undefined };
+        }
+        resolvedFromName = nameResult;
       }
 
       const activeSessionId = resolvedFromName?.sessionId ?? explicitSessionId ?? deps.getSessionForChannel(channelId);
