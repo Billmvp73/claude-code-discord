@@ -219,6 +219,9 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       try {
         await ctx.deferReply();
 
+        // Abort check after deferReply — a cancel during deferReply should stop before thread creation.
+        if (controller.signal.aborted) throw new Error("Aborted before thread creation");
+
         if (deps.sessionThreads) {
           try {
             const threadResult = await deps.sessionThreads.createThreadSender(
@@ -243,6 +246,13 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             if (markedPendingThreadId) deps.clearChannelPending?.(markedPendingThreadId, controller);
           }
         }
+
+        // Abort check after thread creation — if canceled after the thread was created,
+        // bail without calling sendToClaudeCode. The placeholder thread (pending_...) will
+        // not have updateSessionId called, leaving it unregistered — this is acceptable
+        // since the session never started; the thread stays in Discord but is inaccessible
+        // via channelSessionMap.
+        if (controller.signal.aborted) throw new Error("Aborted after thread creation");
 
         await ctx.editReply({
           embeds: [{
