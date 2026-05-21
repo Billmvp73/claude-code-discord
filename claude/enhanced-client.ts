@@ -657,14 +657,13 @@ export interface HistorySession {
 
 /**
  * Encode a real filesystem path the same way the Claude Code SDK does for ~/.claude/projects/:
- * replace each "/" with "-" on the full absolute path.
+ * replace every non-alphanumeric character with "-".
  * Example: /home/tetter/cc-discord → -home-tetter-cc-discord
  * Example: /home/tetter/CSW/tetration/.claude/worktrees/sockmark-enforcer
  *          → -home-tetter-CSW-tetration--claude-worktrees-sockmark-enforcer
- * (The "." in ".claude" makes it a hidden dir segment, preceded by an extra "-".)
  */
 function encodePathForProjects(absPath: string): string {
-  return absPath.replace(/\//g, "-");
+  return absPath.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
 /**
@@ -682,10 +681,13 @@ function encodePathForProjects(absPath: string): string {
  * @param candidateRoots  Known real paths to check (e.g. channel's bound cwd, bot workDir).
  *                        We'll also enumerate git worktrees under each root.
  */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function getSessionCwd(
   sessionId: string,
   candidateRoots: string[] = [],
 ): Promise<string | undefined> {
+  if (!UUID_RE.test(sessionId)) return undefined;
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
   if (!home) {
     console.warn("[getSessionCwd] HOME not set, cannot locate session");
