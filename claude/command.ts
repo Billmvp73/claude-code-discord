@@ -4,7 +4,9 @@ import { convertToClaudeMessages } from "./message-converter.ts";
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
 import type { Message, TextBasedChannel } from "npm:discord.js@14.14.1";
 import { validateProjectPath } from "../project/validate.ts";
-import { getSessionCwd } from "./enhanced-client.ts";
+import { getSessionCwd, resolveSessionByName } from "./enhanced-client.ts";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Callback that creates (or retrieves) a session thread and returns a
 // sender function bound to that thread.
@@ -147,10 +149,25 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       await ctx.deferReply();
 
       // Resolve which session to resume:
-      // 1) Explicit session_id from user → resume that
+      // 1) Explicit session_id from user (UUID or name) → look up or resolve → resume that
       // 2) Active session in this channel/thread → resume that
       // 3) None → start a new session
-      const activeSessionId = explicitSessionId || deps.getSessionForChannel(channelId);
+      const channelCwd = deps.resolveCwdForChannel(channelId, ctx.getParentChannelId?.());
+
+      // If user passed a name (not a UUID), resolve it to a session ID + cwd
+      let resolvedFromName: { sessionId: string; cwd: string } | undefined;
+      if (explicitSessionId && !UUID_RE.test(explicitSessionId)) {
+        resolvedFromName = await resolveSessionByName(explicitSessionId, channelCwd);
+        if (!resolvedFromName) {
+          await ctx.editReply({
+            embeds: [{ color: 0xff0000, title: 'Session Not Found', description: `No session matching name \`${explicitSessionId}\` found in this project.`, timestamp: true }]
+          });
+          deps.setClaudeController(null);
+          return { response: '', sessionId: undefined };
+        }
+      }
+
+      const activeSessionId = resolvedFromName?.sessionId ?? explicitSessionId ?? deps.getSessionForChannel(channelId);
 
       // Pick the right sender — if this channel has a thread, use it
       let activeSender = sendClaudeMessages;
@@ -177,18 +194,18 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         }]
       });
 
-      // When resuming by explicit session_id, look up the session's original cwd so
-      // the SDK can find the conversation (keyed to its original project dir).
-      // Pass the channel's bound cwd as a candidate root for worktree enumeration.
-      const channelCwd = deps.resolveCwdForChannel(
+      // Resolve cwd: name-resolved sessions already have the right cwd; for UUIDs look it up.
+      const resolvedChannelCwd = deps.resolveCwdForChannel(
         sessionThreadChannelId ?? channelId,
         sessionThreadChannelId ? undefined : ctx.getParentChannelId?.(),
       );
       let cwd: string;
-      if (activeSessionId) {
-        cwd = (await getSessionCwd(activeSessionId, [channelCwd, deps.workDir])) ?? channelCwd;
+      if (resolvedFromName) {
+        cwd = resolvedFromName.cwd;
+      } else if (activeSessionId) {
+        cwd = (await getSessionCwd(activeSessionId, [resolvedChannelCwd, deps.workDir])) ?? resolvedChannelCwd;
       } else {
-        cwd = channelCwd;
+        cwd = resolvedChannelCwd;
       }
       const result = await sendToClaudeCode(
         cwd,

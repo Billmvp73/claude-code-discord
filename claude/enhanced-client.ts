@@ -771,6 +771,67 @@ async function dirExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Look up a session ID by its human-readable name.
+ * The SDK stores the name as a `type:"custom-title"` entry in each session's .jsonl file.
+ * Scans all project dirs in ~/.claude/projects/ and checks every session file for a matching name.
+ * Returns the most recently updated matching session's ID, or undefined if not found.
+ * The match is case-insensitive and substring (so "sockmark" matches "sockmark-enforcer-session-2").
+ */
+export async function resolveSessionByName(
+  name: string,
+  projectCwd?: string,
+): Promise<{ sessionId: string; cwd: string } | undefined> {
+  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
+  if (!home || !name.trim()) return undefined;
+  const projectsDir = `${home}/.claude/projects`;
+  const nameLower = name.toLowerCase();
+
+  let best: { sessionId: string; cwd: string; ts: number } | undefined;
+
+  try {
+    for await (const projEntry of Deno.readDir(projectsDir)) {
+      if (!projEntry.isDirectory) continue;
+      const projPath = `${projectsDir}/${projEntry.name}`;
+
+      // If a project cwd is provided, skip dirs that don't match its encoding
+      if (projectCwd && encodePathForProjects(projectCwd) !== projEntry.name) continue;
+
+      try {
+        for await (const fileEntry of Deno.readDir(projPath)) {
+          if (!fileEntry.name.endsWith(".jsonl")) continue;
+          const sessionId = fileEntry.name.replace(/\.jsonl$/, "");
+          if (!UUID_RE.test(sessionId)) continue;
+          try {
+            const raw = await Deno.readTextFile(`${projPath}/${fileEntry.name}`);
+            let customTitle: string | undefined;
+            let updatedAt = 0;
+            for (const line of raw.split("\n")) {
+              if (!line.trim()) continue;
+              try {
+                const entry = JSON.parse(line);
+                if (entry.type === "custom-title" && typeof entry.customTitle === "string") {
+                  customTitle = entry.customTitle;
+                }
+                if (typeof entry.timestamp === "number") updatedAt = Math.max(updatedAt, entry.timestamp);
+              } catch { /* skip */ }
+            }
+            if (customTitle && customTitle.toLowerCase().includes(nameLower)) {
+              if (!best || updatedAt > best.ts) {
+                // Decode project dir back to real cwd using the history approach
+                const cwd = await getSessionCwd(sessionId, projectCwd ? [projectCwd] : []);
+                if (cwd) best = { sessionId, cwd, ts: updatedAt };
+              }
+            }
+          } catch { /* skip unreadable session file */ }
+        }
+      } catch { /* skip unreadable project dir */ }
+    }
+  } catch { /* projects dir missing */ }
+
+  return best ? { sessionId: best.sessionId, cwd: best.cwd } : undefined;
+}
+
 /** Read ~/.claude/history.jsonl and return deduplicated sessions, newest first. */
 export async function readHistorySessions(): Promise<HistorySession[]> {
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
