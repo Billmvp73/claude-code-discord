@@ -421,8 +421,9 @@ export async function sendToClaudeCode(
       };
     // deno-lint-ignore no-explicit-any
     } catch (error: any) {
-      // Clear active query on error, ownership-safe: only clear if still our iterator.
-      if (iterator) clearActiveQueryIf(iterator); else setActiveQuery(null);
+      // Clear active query only if we installed it (iterator was assigned).
+      // If error occurred before claudeQuery(), we never owned activeQuery — don't clear.
+      if (iterator) clearActiveQueryIf(iterator);
       // Properly handle process exit code 143 (SIGTERM) and AbortError
       if (error.name === 'AbortError' || 
           controller.signal.aborted || 
