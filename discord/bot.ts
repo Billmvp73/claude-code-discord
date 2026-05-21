@@ -247,7 +247,15 @@ export async function createDiscordBot(
 
       getChannelId(): string {
         return interaction.channelId ?? '';
-      }
+      },
+      isThread(): boolean {
+        const ch = interaction.channel ?? client.channels.cache.get(interaction.channelId ?? '');
+        return !!(ch?.isThread());
+      },
+      getParentChannelId(): string | undefined {
+        const ch = interaction.channel ?? client.channels.cache.get(interaction.channelId ?? '');
+        return ch?.isThread() ? (ch as any).parentId ?? undefined : undefined;
+      },
     };
   }
 
@@ -619,7 +627,7 @@ export async function createDiscordBot(
 
   // Channel monitoring -- auto-respond to messages from specific bots/webhooks
   if (dependencies.monitorConfig) {
-    const { channelId, botIds, onAlertMessage } = dependencies.monitorConfig;
+    const { channelId, botIds, onAlertMessage, bindings, defaultWorkDir } = dependencies.monitorConfig;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let pendingAlerts: string[] = [];
     let lastAlertMessage: Message | null = null;
@@ -657,7 +665,15 @@ export async function createDiscordBot(
             autoArchiveDuration: 60,
           });
 
-          await onAlertMessage(combined, thread as unknown as TextChannel);
+          // Materialize parent channel binding onto the new alert thread
+          if (bindings && defaultWorkDir) {
+            const parentBound = bindings.resolveWorkDir(channelId);
+            if (parentBound !== defaultWorkDir) {
+              bindings.setBindingSync(thread.id, parentBound);
+            }
+          }
+
+          await onAlertMessage(combined, thread);
         } catch (error) {
           console.error('[Monitor] Error handling alert:', error);
           await channel.send(`Failed to investigate alert: ${error instanceof Error ? error.message : 'Unknown error'}`);

@@ -40,6 +40,7 @@ import { THINKING_MODES, OPERATION_MODES, EFFORT_LEVELS } from "../settings/inde
 import type { ShellManager } from "../shell/index.ts";
 import type { WorktreeBotManager } from "../git/index.ts";
 import type { ProcessCrashHandler, ProcessHealthMonitor } from "../process/index.ts";
+import { ProjectBindings, createProjectHandlers, projectCommands } from "../project/index.ts";
 
 // ================================
 // Types and Interfaces
@@ -139,6 +140,7 @@ export interface AllHandlers {
   agent: ReturnType<typeof createAgentHandlers>;
   screenshot: ReturnType<typeof createScreenshotHandlers>;
   infoCommands: ReturnType<typeof createInfoCommandHandlers>;
+  project: ReturnType<typeof createProjectHandlers>;
 }
 
 /**
@@ -184,6 +186,8 @@ export interface HandlerRegistryDeps {
   /** Thread-per-session callbacks (optional). When provided, each /claude
    *  invocation creates a dedicated Discord thread for its output. */
   sessionThreads?: SessionThreadCallbacks;
+  /** ProjectBindings singleton for channel→workDir resolution */
+  bindings: ProjectBindings;
 }
 
 /**
@@ -385,8 +389,16 @@ export function createAllHandlers(
   const {
     workDir, repoName, branchName, categoryName, discordToken, applicationId,
     shellManager, worktreeBotManager, crashHandler, claudeSessionManager,
-    sendClaudeMessages, onBotSettingsUpdate
+    sendClaudeMessages, onBotSettingsUpdate, bindings
   } = deps;
+
+  const resolveCwdForChannel = (channelId: string, parentChannelId?: string): string => {
+    if (bindings.hasBinding(channelId)) return bindings.resolveWorkDir(channelId);
+    // Tombstone: explicit opt-out — do NOT fall through to parent binding.
+    if (bindings.hasTombstone(channelId)) return workDir;
+    if (parentChannelId && bindings.hasBinding(parentChannelId)) return bindings.resolveWorkDir(parentChannelId);
+    return workDir;
+  };
 
   const currentSettings = settings.getSettings();
 
@@ -521,6 +533,8 @@ export function createAllHandlers(
 
   const claudeHandlers = createClaudeHandlers({
     workDir,
+    resolveCwdForChannel,
+    bindings,
     getClaudeController: claudeSession.getController,
     setClaudeController: claudeSession.setController,
     getSessionForChannel: (channelId: string) => channelSessionMap.get(channelId),
@@ -595,6 +609,7 @@ export function createAllHandlers(
     sessionManager: claudeSessionManager,
     crashHandler,
     getQueryOptions,
+    resolveCwdForChannel,
   });
 
   const systemHandlers = createSystemHandlers({
@@ -611,6 +626,7 @@ export function createAllHandlers(
     crashHandler,
     settings: currentSettings.advanced,
     getQueryOptions,
+    resolveCwdForChannel,
   });
 
   const advancedSettingsHandlers = createAdvancedSettingsHandlers({
@@ -632,6 +648,7 @@ export function createAllHandlers(
     sendClaudeMessages,
     sessionManager: claudeSessionManager,
     getQueryOptions,
+    resolveCwdForChannel,
   });
 
   const screenshotHandlers = createScreenshotHandlers({
@@ -644,6 +661,8 @@ export function createAllHandlers(
     getUnifiedSettings: () => settings.getSettings().unified,
     updateUnifiedSettings: (partial) => settings.updateUnified(partial),
   });
+
+  const projectHandlers = createProjectHandlers({ bindings, defaultWorkDir: workDir });
 
   return {
     claude: claudeHandlers,
@@ -659,6 +678,7 @@ export function createAllHandlers(
     agent: agentHandlers,
     screenshot: screenshotHandlers,
     infoCommands: infoCommandHandlers,
+    project: projectHandlers,
   };
 }
 
@@ -681,6 +701,7 @@ export function getAllCommands() {
     ...systemCommands,
     ...screenshotCommands,
     ...infoCommands,
+    ...projectCommands,
     helpCommand,
   ];
 }

@@ -56,6 +56,26 @@ Discord slash command
 3. Export command + handler from the module's `index.ts`
 4. Import and wire both into `core/handler-registry.ts` (`getAllCommands()` + `createAllHandlers()`)
 
+### Project resolution
+
+Each Discord thread or channel can be bound to a specific git repository directory ("project"). When a bound channel receives a Claude command or free-form message, the SDK runs with that directory as `cwd`.
+
+**Resolution chain** (first match wins):
+1. Direct binding for the current thread/channel (set via `/project bind` or `/claude-thread dir:`)
+2. Parent channel binding (for threads under a bound text channel)
+3. Global default: the directory the bot was launched from
+
+**Binding management:** `/project bind|unbind|show|list`
+
+**Operational side effects of changing `cwd`:**
+- `.claude/mcp.json` is read from the project directory
+- `.claude/settings*.json` project-scoped settings are loaded from the project directory
+- `.claude/agents/` and `.claude/hooks/` are discovered from the project directory
+
+This is intentional — a "project" is genuinely defined by its `cwd`-scoped config.
+
+**Known limitation:** If `MONITOR_CHANNEL_ID` points to a different channel than the bot's main channel, `/project bind` cannot be run there (Discord routes commands only to the bot's main channel/threads). To use project bindings with monitor alerts, set `MONITOR_CHANNEL_ID` to the bot's main channel ID.
+
 ### AWS Bedrock backend
 
 Set `CLAUDE_CODE_USE_BEDROCK=1` plus AWS credentials (static keys, profile, or IAM role). When active, the bot uses `us.anthropic.*` cross-region inference profile IDs and `ANTHROPIC_API_KEY` is not required. See `.env.example` for the full variable list.
@@ -69,6 +89,7 @@ Plain text typed in the bot's channel or any thread under it triggers Claude wit
 - **`/claude-thread` placeholder window**: if a user sends a free-form message in a `/claude-thread` thread *while the thread is still being created* (between Discord thread creation and the first response), they will see a ⌛ reaction and the message is ignored. This window is typically 1–3 seconds.
 - **AskUser/permission routing during cancel+restart**: if `/claude-cancel` is called while Claude is waiting for a user to click an AskUserQuestion or permission-request button, and a new `/claude-thread` is started immediately after, the stale permission/question prompt may route to the old thread for the duration of Discord's component timeout before falling back. This is a known edge case with no practical workaround short of making Discord collectors abort-aware.
 - **Global single-run model**: the bot runs one Claude query at a time globally. All commands and free-form messages in *any* channel are blocked (⌛) while a `/claude-thread` is in its startup window. After the session is established (a few seconds), only the originating channel is blocked.
+- **Project binding and cross-channel `/resume`**: when a plain `/claude` session (no dedicated thread) is started in channel A and then resumed via `/resume` or `/claude session_id:...` from a different channel, the resumed run uses the *invoking channel's* project binding rather than channel A's. This only affects explicit cross-channel resumes of non-thread sessions. Sessions started via `/claude-thread` are not affected — their cwd is resolved from the session thread's channel id.
 
 ### AskUser/permission button routing
 `getActiveSessionChannel()` in `index.ts` routes AskUser and permission-request buttons to the most recently active session thread. If multiple sessions are running concurrently (not possible today with the single-run model, but relevant if that changes), buttons may appear in the wrong channel.

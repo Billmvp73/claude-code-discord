@@ -19,7 +19,8 @@ import {
   type MessageContent,
   SessionThreadManager,
 } from "./discord/index.ts";
-import type { Message, TextBasedChannel, TextChannel } from "npm:discord.js@14.14.1";
+import type { Message, TextBasedChannel, TextChannel, ThreadChannel } from "npm:discord.js@14.14.1";
+import { ProjectBindings } from "./project/index.ts";
 
 import { getGitInfo } from "./git/index.ts";
 import { createClaudeSender, expandableContent, sendToClaudeCode, convertToClaudeMessages, type DiscordSender, type ClaudeMessage, type SessionThreadCallbacks } from "./claude/index.ts";
@@ -183,7 +184,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
       }
       sessionThreadManager.recordActivity(sessionId);
       const threadSender = createClaudeSender(createChannelSenderAdapter(existingThread));
-      return { sender: threadSender, threadSessionKey: sessionId };
+      return { sender: threadSender, threadSessionKey: sessionId, threadChannelId: existingThread.id };
     },
 
     updateSessionId(oldKey: string, newSessionId: string) {
@@ -240,6 +241,10 @@ export async function createClaudeCodeBot(config: BotConfig) {
     return await permReqState.handler(toolName, toolInput);
   };
 
+  // Instantiate and load the ProjectBindings singleton
+  const projectBindings = new ProjectBindings(workDir);
+  await projectBindings.load();
+
   // Create all handlers using the registry (centralized handler creation)
   const allHandlers: AllHandlers = createAllHandlers(
     {
@@ -268,6 +273,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
       sessionThreads: sessionThreadCallbacks,
       createSenderForChannel: (channel: TextBasedChannel) =>
         createClaudeSender(createChannelSenderAdapter(channel)),
+      bindings: projectBindings,
     },
     {
       getController: () => claudeController,
@@ -324,7 +330,9 @@ export async function createClaudeCodeBot(config: BotConfig) {
       monitorConfig: {
         channelId: monitorChannelId,
         botIds: monitorBotIds,
-        onAlertMessage: async (content: string, thread: TextChannel) => {
+        bindings: projectBindings,
+        defaultWorkDir: workDir,
+        onAlertMessage: async (content: string, thread: ThreadChannel) => {
           const prompt = [
             "A monitoring alert notification was just received. Investigate this alert.",
             "Identify the alert, check severity, gather diagnostics, analyze the root cause, and report findings.",
@@ -338,8 +346,11 @@ export async function createClaudeCodeBot(config: BotConfig) {
           const threadSender = createClaudeSender(createChannelSenderAdapter(thread));
 
           const controller = new AbortController();
+          // TODO(monitor-settings): the monitor alert path doesn't pass getQueryOptions
+          // because getQueryOptions is built inside createAllHandlers and not plumbed through
+          // to this closure. The alert runs with default SDK options (no model/thinking/etc).
           await sendToClaudeCode(
-            workDir,
+            projectBindings.resolveWorkDir(thread.id),
             prompt,
             controller,
             undefined,

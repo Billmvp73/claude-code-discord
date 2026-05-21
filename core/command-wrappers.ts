@@ -300,8 +300,25 @@ export function createClaudeCommandHandlers(
       execute: async (ctx: InteractionContext) => {
         const prompt = ctx.getString('prompt', true)!;
         const threadName = ctx.getString('name') || undefined;
+        const dir = ctx.getString('dir') ?? undefined;
+        // RBAC: if a dir: override is requested, require 'project' permission
+        if (dir) {
+          const rbacConfig = loadRBACConfig();
+          if (rbacConfig.enabled && !hasPermission(ctx)) {
+            await ctx.deferReply();
+            await ctx.editReply({
+              embeds: [{
+                color: 0xff0000,
+                title: '🔒 Permission denied',
+                description: 'The `dir:` parameter requires an admin role.',
+                timestamp: true,
+              }]
+            });
+            return;
+          }
+        }
         addToHistory(prompt);
-        await claudeHandlers.onClaudeThread(ctx, prompt, threadName);
+        await claudeHandlers.onClaudeThread(ctx, prompt, threadName, dir);
       }
     }],
     ['resume', {
@@ -555,6 +572,7 @@ function createInfoCommandsMap(
 
 // Import git/shell handlers for complete factory
 import { createGitCommandHandlers, createShellCommandHandlers, createUtilityCommandHandlers, type GitShellHandlerDeps } from "./git-shell-handlers.ts";
+import { hasPermission, loadRBACConfig } from "./rbac.ts";
 
 /**
  * Extended dependencies for complete command handler creation.
@@ -592,6 +610,33 @@ export function createAllCommandHandlers(deps: CommandWrapperDeps): CommandHandl
   const shellHandlers = createShellCommandHandlers(gitShellDeps);
   const utilityHandlers = createUtilityCommandHandlers(gitShellDeps);
 
+  // Project command handlers
+  const projectCommandHandlers: Map<string, { execute: (ctx: InteractionContext) => Promise<void> }> = new Map([
+    ['project', {
+      execute: async (ctx: InteractionContext) => {
+        const action = ctx.getString('action', true)!;
+        const path = ctx.getString('path');
+        switch (action) {
+          case 'bind':
+            await handlers.project.handleBind(ctx, path);
+            break;
+          case 'unbind':
+            await handlers.project.handleUnbind(ctx);
+            break;
+          case 'show':
+            await handlers.project.handleShow(ctx);
+            break;
+          case 'list':
+            await handlers.project.handleList(ctx);
+            break;
+          default:
+            await ctx.deferReply();
+            await ctx.editReply({ embeds: [{ color: 0xff0000, title: 'Unknown action', description: `Unknown action: ${action}` }] });
+        }
+      }
+    }],
+  ]);
+
   // Combine all handlers into single map
   const commandHandlers: CommandHandlers = new Map([
     ...systemHandlers,
@@ -603,6 +648,7 @@ export function createAllCommandHandlers(deps: CommandWrapperDeps): CommandHandl
     ...gitHandlers,
     ...shellHandlers,
     ...utilityHandlers,
+    ...projectCommandHandlers,
   ]);
 
   return commandHandlers;
