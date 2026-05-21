@@ -37,6 +37,11 @@ export interface SessionThreadCallbacks {
    * Used by free-form cold-starts in threads so /resume and Continue route back there.
    */
   registerExistingChannelThread?(channelId: string, sessionId: string): void;
+  /**
+   * Remove a placeholder session thread entry (e.g. on cancel-before-session-start).
+   * Prevents abandoned pending_ entries from hijacking AskUser/permission routing.
+   */
+  removeSessionThread?(key: string): void;
 }
 
 // Discord command definitions
@@ -247,12 +252,14 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           }
         }
 
-        // Abort check after thread creation — if canceled after the thread was created,
-        // bail without calling sendToClaudeCode. The placeholder thread (pending_...) will
-        // not have updateSessionId called, leaving it unregistered — this is acceptable
-        // since the session never started; the thread stays in Discord but is inaccessible
-        // via channelSessionMap.
-        if (controller.signal.aborted) throw new Error("Aborted after thread creation");
+        // Abort check after thread creation — if canceled, remove the placeholder from
+        // SessionThreadManager so it can't hijack AskUser/permission routing for later runs.
+        if (controller.signal.aborted) {
+          if (threadSessionKey && deps.sessionThreads) {
+            deps.sessionThreads.removeSessionThread?.(threadSessionKey);
+          }
+          throw new Error("Aborted after thread creation");
+        }
 
         await ctx.editReply({
           embeds: [{

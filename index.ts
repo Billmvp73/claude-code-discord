@@ -190,6 +190,10 @@ export async function createClaudeCodeBot(config: BotConfig) {
       sessionThreadManager.updateSessionId(oldKey, newSessionId);
     },
 
+    removeSessionThread(key: string) {
+      sessionThreadManager.removeSessionThread(key);
+    },
+
     registerExistingChannelThread(channelId: string, sessionId: string) {
       // Register an existing Discord thread as the routing target for this session
       // so /resume and Continue buttons send output there, not to the main channel.
