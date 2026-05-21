@@ -1,5 +1,5 @@
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
-import { CLAUDE_MODELS, CLAUDE_TEMPLATES, resolveModelId, readSdkSessions, type ModelInfo, type SdkSession } from "./enhanced-client.ts";
+import { CLAUDE_MODELS, CLAUDE_TEMPLATES, resolveModelId, readSdkSessions, readHistorySessions, type ModelInfo, type SdkSession, type HistorySession } from "./enhanced-client.ts";
 import { basename } from "https://deno.land/std@0.208.0/path/mod.ts";
 
 export const enhancedClaudeCommands = [
@@ -245,17 +245,17 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
               ctx.getChannelId?.() ?? '',
               ctx.getParentChannelId?.() ?? undefined
             ) ?? workDir;
-            const allSessions = await readSdkSessions();
+            const allSessions = await readHistorySessions();
             // Match the project root and any subdirectory/worktree beneath it
-            const sessions = allSessions.filter((s: SdkSession) =>
-              s.cwd === projectCwd || s.cwd.startsWith(projectCwd + "/")
+            const sessions = allSessions.filter((s: HistorySession) =>
+              s.project === projectCwd || s.project.startsWith(projectCwd + "/")
             );
             if (sessions.length === 0) {
               await ctx.reply({
                 embeds: [{
                   color: 0xffaa00,
                   title: '📋 Claude Sessions',
-                  description: `No active sessions found for \`${basename(projectCwd)}\`.`,
+                  description: `No sessions found for \`${basename(projectCwd)}\`.`,
                   timestamp: true
                 }],
                 ephemeral: true
@@ -263,10 +263,13 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
               return;
             }
 
-            const sessionsList = sessions.map((s: SdkSession) => {
-              const statusEmoji = s.status === 'busy' ? '🟢' : '⚪';
-              const ago = formatDuration(Date.now() - s.updatedAt);
-              return `\`${s.sessionId}\`\n**${s.name || 'unnamed'}** | ${basename(s.cwd)} | ${statusEmoji} ${s.status} | updated ${ago} ago`;
+            // Show up to 15 most recent; Discord embeds have a 4096-char description limit
+            const shown = sessions.slice(0, 15);
+            const sessionsList = shown.map((s: HistorySession) => {
+              const ago = s.lastTimestamp > 0 ? formatDuration(Date.now() - s.lastTimestamp) + ' ago' : 'unknown';
+              const dir = basename(s.project);
+              const prompt = s.lastPrompt ? s.lastPrompt.substring(0, 60) + (s.lastPrompt.length > 60 ? '…' : '') : '(no prompt)';
+              return `\`${s.sessionId}\`\n${dir} | ${ago} | ${prompt}`;
             }).join('\n\n');
 
             await ctx.reply({
@@ -274,7 +277,7 @@ export function createEnhancedClaudeHandlers(deps: EnhancedClaudeHandlerDeps) {
                 color: 0x00ff00,
                 title: `📋 Claude Sessions — ${basename(projectCwd)}`,
                 description: sessionsList,
-                footer: { text: `${sessions.length} session(s) in ${projectCwd}` },
+                footer: { text: `Showing ${shown.length} of ${sessions.length} session(s) • Use session_id with /claude to resume` },
                 timestamp: true
               }],
               ephemeral: true

@@ -648,6 +648,42 @@ export async function readSdkSessions(): Promise<SdkSession[]> {
   return sessions.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+export interface HistorySession {
+  sessionId: string;
+  project: string;   // cwd of the session
+  lastPrompt: string;
+  lastTimestamp: number;  // ms epoch
+}
+
+/** Read ~/.claude/history.jsonl and return deduplicated sessions, newest first. */
+export async function readHistorySessions(): Promise<HistorySession[]> {
+  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
+  if (!home) return [];
+  const historyPath = `${home}/.claude/history.jsonl`;
+  const sessionMap = new Map<string, HistorySession>();
+  try {
+    const raw = await Deno.readTextFile(historyPath);
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        const entry = JSON.parse(trimmed);
+        const sessionId = entry.sessionId;
+        const project = entry.project;
+        const ts = typeof entry.timestamp === "number" ? entry.timestamp : 0;
+        const display = typeof entry.display === "string" ? entry.display : "";
+        if (typeof sessionId !== "string" || !sessionId) continue;
+        if (typeof project !== "string" || !project) continue;
+        const existing = sessionMap.get(sessionId);
+        if (!existing || ts > existing.lastTimestamp) {
+          sessionMap.set(sessionId, { sessionId, project, lastPrompt: display, lastTimestamp: ts });
+        }
+      } catch { /* skip malformed lines */ }
+    }
+  } catch { /* history file missing — return empty */ }
+  return Array.from(sessionMap.values()).sort((a, b) => b.lastTimestamp - a.lastTimestamp);
+}
+
 // Quick prompt templates for common tasks
 export const CLAUDE_TEMPLATES = {
   debug: "Please help me debug this issue. Analyze the error and provide a solution:",
