@@ -655,29 +655,188 @@ export interface HistorySession {
   lastTimestamp: number;  // ms epoch
 }
 
-/** Look up the original cwd for a session ID from history.jsonl. Returns undefined if not found. */
-export async function getSessionCwd(sessionId: string): Promise<string | undefined> {
+/**
+ * Encode a real filesystem path the same way the Claude Code SDK does for ~/.claude/projects/:
+ * replace every non-alphanumeric character with "-".
+ * Example: /home/tetter/cc-discord → -home-tetter-cc-discord
+ * Example: /home/tetter/CSW/tetration/.claude/worktrees/sockmark-enforcer
+ *          → -home-tetter-CSW-tetration--claude-worktrees-sockmark-enforcer
+ */
+function encodePathForProjects(absPath: string): string {
+  return absPath.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+/**
+ * Look up the original cwd for a session ID by scanning ~/.claude/projects/.
+ *
+ * Strategy: the SDK stores sessions under ~/.claude/projects/<encoded>/<sessionId>.jsonl
+ * where <encoded> = absPath.replace(/\//g, "-"). Since the encoding is lossy for paths
+ * containing hyphens, we CANNOT decode back to a path. Instead we:
+ * 1. Find the encoded dir name that contains the session file.
+ * 2. Enumerate candidate real paths (git worktrees from the channel's project root,
+ *    plus history.jsonl project paths) and forward-encode each one.
+ * 3. Return the first candidate whose encoded form matches the encoded dir name.
+ *
+ * @param sessionId  The SDK session UUID to look up.
+ * @param candidateRoots  Known real paths to check (e.g. channel's bound cwd, bot workDir).
+ *                        We'll also enumerate git worktrees under each root.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function getSessionCwd(
+  sessionId: string,
+  candidateRoots: string[] = [],
+): Promise<string | undefined> {
+  if (!UUID_RE.test(sessionId)) return undefined;
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
-  if (!home) return undefined;
-  const historyPath = `${home}/.claude/history.jsonl`;
-  let found: { project: string; ts: number } | undefined;
+  if (!home) {
+    console.warn("[getSessionCwd] HOME not set, cannot locate session");
+    return undefined;
+  }
+  const projectsDir = `${home}/.claude/projects`;
+
+  // Step 1: find the encoded project dir containing this session file
+  let encodedDir: string | undefined;
   try {
-    const raw = await Deno.readTextFile(historyPath);
-    for (const line of raw.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
+    for await (const entry of Deno.readDir(projectsDir)) {
+      if (!entry.isDirectory) continue;
       try {
-        const entry = JSON.parse(trimmed);
-        if (entry.sessionId === sessionId && typeof entry.project === "string" && entry.project) {
-          const ts = typeof entry.timestamp === "number" ? entry.timestamp : 0;
-          if (!found || ts > found.ts) {
-            found = { project: entry.project, ts };
-          }
+        await Deno.stat(`${projectsDir}/${entry.name}/${sessionId}.jsonl`);
+        encodedDir = entry.name;
+        break;
+      } catch { /* not in this dir */ }
+    }
+  } catch { /* projects dir missing */ }
+
+  if (!encodedDir) return undefined;
+
+  // Step 2: history.jsonl is the most authoritative source — it records the exact
+  // filesystem path for each session. Check it FIRST before trying generic roots/worktrees,
+  // to avoid a generic candidate shadowing the authoritative match when two paths
+  // have the same encoded form (e.g. /tmp/a-b and /tmp/a/b both encode to -tmp-a-b).
+  try {
+    const raw = await Deno.readTextFile(`${home}/.claude/history.jsonl`);
+    let historyMatch: string | undefined;
+    let historyMatchTs = -1;
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e.sessionId === sessionId && typeof e.project === "string" && e.project) {
+          const ts = typeof e.timestamp === "number" ? e.timestamp : 0;
+          if (ts > historyMatchTs) { historyMatch = e.project; historyMatchTs = ts; }
         }
       } catch { /* skip */ }
     }
-  } catch { /* history file missing */ }
-  return found?.project;
+    if (historyMatch && encodePathForProjects(historyMatch) === encodedDir) {
+      if (await dirExists(historyMatch)) return historyMatch;
+    }
+  } catch { /* history missing — fall through */ }
+
+  // Step 3: fallback — enumerate roots and their git worktrees
+  const candidates = new Set<string>();
+  for (const root of candidateRoots) {
+    if (root) candidates.add(root);
+  }
+  for (const root of candidateRoots) {
+    if (!root) continue;
+    try {
+      const cmd = new Deno.Command("git", {
+        args: ["-C", root, "worktree", "list", "--porcelain"],
+        stdout: "piped", stderr: "piped",
+      });
+      const out = await cmd.output();
+      if (out.code === 0) {
+        for (const line of new TextDecoder().decode(out.stdout).split("\n")) {
+          if (line.startsWith("worktree ")) candidates.add(line.slice(9));
+        }
+      }
+    } catch { /* not a git repo or git unavailable */ }
+  }
+
+  for (const candidate of candidates) {
+    if (encodePathForProjects(candidate) === encodedDir) {
+      if (await dirExists(candidate)) return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+async function dirExists(path: string): Promise<boolean> {
+  try {
+    return (await Deno.stat(path)).isDirectory;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Look up a session ID by its human-readable name.
+ * Returns:
+ *   { sessionId, cwd } — exactly one match found
+ *   'ambiguous'        — multiple distinct sessions match (caller should ask user to be specific)
+ *   undefined          — no match found or name too short
+ *
+ * Rules: minimum 3 characters, case-insensitive substring match on customTitle.
+ * If projectCwd is provided, only that project's sessions are searched.
+ */
+export async function resolveSessionByName(
+  name: string,
+  projectCwd?: string,
+): Promise<{ sessionId: string; cwd: string } | 'ambiguous' | undefined> {
+  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
+  const trimmed = name.trim();
+  if (!home || trimmed.length < 3) return undefined;
+  const projectsDir = `${home}/.claude/projects`;
+  const nameLower = trimmed.toLowerCase();
+
+  const matches = new Map<string, { cwd: string; ts: number }>(); // sessionId → best
+
+  try {
+    for await (const projEntry of Deno.readDir(projectsDir)) {
+      if (!projEntry.isDirectory) continue;
+      const projPath = `${projectsDir}/${projEntry.name}`;
+
+      // If a project cwd is provided, skip dirs that don't match its encoding
+      if (projectCwd && encodePathForProjects(projectCwd) !== projEntry.name) continue;
+
+      try {
+        for await (const fileEntry of Deno.readDir(projPath)) {
+          if (!fileEntry.name.endsWith(".jsonl")) continue;
+          const sessionId = fileEntry.name.replace(/\.jsonl$/, "");
+          if (!UUID_RE.test(sessionId)) continue;
+          try {
+            const raw = await Deno.readTextFile(`${projPath}/${fileEntry.name}`);
+            let customTitle: string | undefined;
+            let updatedAt = 0;
+            for (const line of raw.split("\n")) {
+              if (!line.trim()) continue;
+              try {
+                const entry = JSON.parse(line);
+                if (entry.type === "custom-title" && typeof entry.customTitle === "string") {
+                  customTitle = entry.customTitle;
+                }
+                if (typeof entry.timestamp === "number") updatedAt = Math.max(updatedAt, entry.timestamp);
+              } catch { /* skip */ }
+            }
+            if (customTitle && customTitle.toLowerCase().includes(nameLower)) {
+              const existing = matches.get(sessionId);
+              if (!existing || updatedAt > existing.ts) {
+                const cwd = await getSessionCwd(sessionId, projectCwd ? [projectCwd] : []);
+                if (cwd) matches.set(sessionId, { cwd, ts: updatedAt });
+              }
+            }
+          } catch { /* skip unreadable session file */ }
+        }
+      } catch { /* skip unreadable project dir */ }
+    }
+  } catch { /* projects dir missing */ }
+
+  if (matches.size === 0) return undefined;
+  if (matches.size > 1) return 'ambiguous';
+  const [[sessionId, { cwd }]] = matches;
+  return { sessionId, cwd };
 }
 
 /** Read ~/.claude/history.jsonl and return deduplicated sessions, newest first. */

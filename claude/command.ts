@@ -4,7 +4,9 @@ import { convertToClaudeMessages } from "./message-converter.ts";
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
 import type { Message, TextBasedChannel } from "npm:discord.js@14.14.1";
 import { validateProjectPath } from "../project/validate.ts";
-import { getSessionCwd } from "./enhanced-client.ts";
+import { getSessionCwd, resolveSessionByName } from "./enhanced-client.ts";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Callback that creates (or retrieves) a session thread and returns a
 // sender function bound to that thread.
@@ -147,10 +149,34 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       await ctx.deferReply();
 
       // Resolve which session to resume:
-      // 1) Explicit session_id from user → resume that
+      // 1) Explicit session_id from user (UUID or name) → look up or resolve → resume that
       // 2) Active session in this channel/thread → resume that
       // 3) None → start a new session
-      const activeSessionId = explicitSessionId || deps.getSessionForChannel(channelId);
+      const channelCwd = deps.resolveCwdForChannel(channelId, ctx.getParentChannelId?.());
+
+      // If user passed a name (not a UUID), resolve it to a session ID + cwd
+      let resolvedFromName: { sessionId: string; cwd: string } | undefined;
+      if (explicitSessionId && !UUID_RE.test(explicitSessionId)) {
+        const nameResult = await resolveSessionByName(explicitSessionId, channelCwd);
+        if (!nameResult) {
+          await ctx.editReply({
+            embeds: [{ color: 0xff0000, title: 'Session Not Found', description: `No session matching name \`${explicitSessionId}\` found in this project.`, timestamp: true }]
+          });
+          // Use ownership guard — don't clear a newer run's controller
+          if (deps.getClaudeController() === controller) deps.setClaudeController(null);
+          return { response: '', sessionId: undefined };
+        }
+        if (nameResult === 'ambiguous') {
+          await ctx.editReply({
+            embeds: [{ color: 0xff0000, title: 'Ambiguous Name', description: `Multiple sessions match \`${explicitSessionId}\`. Use a more specific name or the full session ID.`, timestamp: true }]
+          });
+          if (deps.getClaudeController() === controller) deps.setClaudeController(null);
+          return { response: '', sessionId: undefined };
+        }
+        resolvedFromName = nameResult;
+      }
+
+      const activeSessionId = resolvedFromName?.sessionId ?? explicitSessionId ?? deps.getSessionForChannel(channelId);
 
       // Pick the right sender — if this channel has a thread, use it
       let activeSender = sendClaudeMessages;
@@ -177,15 +203,18 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         }]
       });
 
-      // When resuming by explicit session_id, use that session's original cwd from
-      // history.jsonl so the SDK finds the conversation (it's keyed to the original dir).
-      // For channel-bound sessions fall back to the channel's project binding.
+      // Resolve cwd: name-resolved sessions already have the right cwd; for UUIDs look it up.
+      const resolvedChannelCwd = deps.resolveCwdForChannel(
+        sessionThreadChannelId ?? channelId,
+        sessionThreadChannelId ? undefined : ctx.getParentChannelId?.(),
+      );
       let cwd: string;
-      if (activeSessionId) {
-        cwd = (await getSessionCwd(activeSessionId)) ??
-          deps.resolveCwdForChannel(sessionThreadChannelId ?? channelId, sessionThreadChannelId ? undefined : ctx.getParentChannelId?.());
+      if (resolvedFromName) {
+        cwd = resolvedFromName.cwd;
+      } else if (activeSessionId) {
+        cwd = (await getSessionCwd(activeSessionId, [resolvedChannelCwd, deps.workDir])) ?? resolvedChannelCwd;
       } else {
-        cwd = deps.resolveCwdForChannel(channelId, ctx.getParentChannelId?.());
+        cwd = resolvedChannelCwd;
       }
       const result = await sendToClaudeCode(
         cwd,
@@ -459,18 +488,24 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       await ctx.editReply({ embeds: [embedData] });
 
-      // Use the session's original cwd from history so the SDK finds the conversation.
+      // Use the session's original cwd so the SDK finds the conversation.
+      // When we have an explicit session ID, pass it as `resume` (not continueMode)
+      // because continueMode suppresses the resume ID in the SDK call.
       const currentSessionId = deps.getClaudeSessionId();
       const cwdChannelId = sessionThreadChannelId ?? channelId;
       const cwdParentId = sessionThreadChannelId ? undefined : ctx.getParentChannelId?.();
+      const fallbackCwd = deps.resolveCwdForChannel(cwdChannelId, cwdParentId);
       const cwd = currentSessionId
-        ? ((await getSessionCwd(currentSessionId)) ?? deps.resolveCwdForChannel(cwdChannelId, cwdParentId))
-        : deps.resolveCwdForChannel(cwdChannelId, cwdParentId);
+        ? ((await getSessionCwd(currentSessionId, [fallbackCwd, deps.workDir])) ?? fallbackCwd)
+        : fallbackCwd;
+      // If we have a specific session ID, use resume (not continueMode) so the SDK
+      // explicitly seeks that session rather than inferring from cwd.
+      const useResume = !!currentSessionId;
       const result = await sendToClaudeCode(
         cwd,
         actualPrompt,
         controller,
-        undefined,
+        useResume ? currentSessionId : undefined,
         undefined,
         (jsonData) => {
           const claudeMessages = convertToClaudeMessages(jsonData);
@@ -478,7 +513,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             activeSender(claudeMessages).catch(() => {});
           }
         },
-        true, // continueMode = true
+        !useResume, // continueMode only when no explicit session ID
         deps.getQueryOptions?.()
       );
 
