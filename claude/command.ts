@@ -106,6 +106,8 @@ export interface ClaudeHandlerDeps {
   isChannelPending?: (channelId: string) => boolean;
   /** Check whether ANY channel has an in-flight run (global scope, matches the singleton controller) */
   isAnyChannelPending?: () => boolean;
+  /** Clear all pending markers — used by cancel to prevent the guard staying latched */
+  clearAllPending?: () => void;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
@@ -457,6 +459,8 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       currentController.abort();
       deps.setClaudeController(null);
       deps.setClaudeSessionId(undefined);
+      // Clear any pending markers so the global guard doesn't stay latched after cancel.
+      deps.clearAllPending?.();
 
       return true;
     }
