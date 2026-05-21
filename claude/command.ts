@@ -177,15 +177,18 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         }]
       });
 
-      // When resuming by explicit session_id, use that session's original cwd from
-      // history.jsonl so the SDK finds the conversation (it's keyed to the original dir).
-      // For channel-bound sessions fall back to the channel's project binding.
+      // When resuming by explicit session_id, look up the session's original cwd so
+      // the SDK can find the conversation (keyed to its original project dir).
+      // Pass the channel's bound cwd as a candidate root for worktree enumeration.
+      const channelCwd = deps.resolveCwdForChannel(
+        sessionThreadChannelId ?? channelId,
+        sessionThreadChannelId ? undefined : ctx.getParentChannelId?.(),
+      );
       let cwd: string;
       if (activeSessionId) {
-        cwd = (await getSessionCwd(activeSessionId)) ??
-          deps.resolveCwdForChannel(sessionThreadChannelId ?? channelId, sessionThreadChannelId ? undefined : ctx.getParentChannelId?.());
+        cwd = (await getSessionCwd(activeSessionId, [channelCwd, deps.workDir])) ?? channelCwd;
       } else {
-        cwd = deps.resolveCwdForChannel(channelId, ctx.getParentChannelId?.());
+        cwd = channelCwd;
       }
       const result = await sendToClaudeCode(
         cwd,
@@ -459,18 +462,24 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       await ctx.editReply({ embeds: [embedData] });
 
-      // Use the session's original cwd from history so the SDK finds the conversation.
+      // Use the session's original cwd so the SDK finds the conversation.
+      // When we have an explicit session ID, pass it as `resume` (not continueMode)
+      // because continueMode suppresses the resume ID in the SDK call.
       const currentSessionId = deps.getClaudeSessionId();
       const cwdChannelId = sessionThreadChannelId ?? channelId;
       const cwdParentId = sessionThreadChannelId ? undefined : ctx.getParentChannelId?.();
+      const fallbackCwd = deps.resolveCwdForChannel(cwdChannelId, cwdParentId);
       const cwd = currentSessionId
-        ? ((await getSessionCwd(currentSessionId)) ?? deps.resolveCwdForChannel(cwdChannelId, cwdParentId))
-        : deps.resolveCwdForChannel(cwdChannelId, cwdParentId);
+        ? ((await getSessionCwd(currentSessionId, [fallbackCwd, deps.workDir])) ?? fallbackCwd)
+        : fallbackCwd;
+      // If we have a specific session ID, use resume (not continueMode) so the SDK
+      // explicitly seeks that session rather than inferring from cwd.
+      const useResume = !!currentSessionId;
       const result = await sendToClaudeCode(
         cwd,
         actualPrompt,
         controller,
-        currentSessionId, // pass explicit session ID so SDK finds the right conversation
+        useResume ? currentSessionId : undefined,
         undefined,
         (jsonData) => {
           const claudeMessages = convertToClaudeMessages(jsonData);
@@ -478,7 +487,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             activeSender(claudeMessages).catch(() => {});
           }
         },
-        true, // continueMode = true
+        !useResume, // continueMode only when no explicit session ID
         deps.getQueryOptions?.()
       );
 

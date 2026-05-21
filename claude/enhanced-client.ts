@@ -656,15 +656,36 @@ export interface HistorySession {
 }
 
 /**
- * Look up the original cwd for a session ID by scanning ~/.claude/projects/.
- * The SDK stores conversations under ~/.claude/projects/<encoded-path>/<sessionId>.jsonl
- * where <encoded-path> encodes the filesystem path (/ → -, /. → --).
- * We find which project dir contains the session file, then decode it back by matching
- * against real git worktrees (handles directory names with hyphens that would otherwise
- * be ambiguous). Falls back to history.jsonl project field if worktree matching fails.
- * Returns undefined if not found.
+ * Encode a real filesystem path the same way the Claude Code SDK does for ~/.claude/projects/:
+ * replace each "/" with "-" on the full absolute path.
+ * Example: /home/tetter/cc-discord → -home-tetter-cc-discord
+ * Example: /home/tetter/CSW/tetration/.claude/worktrees/sockmark-enforcer
+ *          → -home-tetter-CSW-tetration--claude-worktrees-sockmark-enforcer
+ * (The "." in ".claude" makes it a hidden dir segment, preceded by an extra "-".)
  */
-export async function getSessionCwd(sessionId: string): Promise<string | undefined> {
+function encodePathForProjects(absPath: string): string {
+  return absPath.replace(/\//g, "-");
+}
+
+/**
+ * Look up the original cwd for a session ID by scanning ~/.claude/projects/.
+ *
+ * Strategy: the SDK stores sessions under ~/.claude/projects/<encoded>/<sessionId>.jsonl
+ * where <encoded> = absPath.replace(/\//g, "-"). Since the encoding is lossy for paths
+ * containing hyphens, we CANNOT decode back to a path. Instead we:
+ * 1. Find the encoded dir name that contains the session file.
+ * 2. Enumerate candidate real paths (git worktrees from the channel's project root,
+ *    plus history.jsonl project paths) and forward-encode each one.
+ * 3. Return the first candidate whose encoded form matches the encoded dir name.
+ *
+ * @param sessionId  The SDK session UUID to look up.
+ * @param candidateRoots  Known real paths to check (e.g. channel's bound cwd, bot workDir).
+ *                        We'll also enumerate git worktrees under each root.
+ */
+export async function getSessionCwd(
+  sessionId: string,
+  candidateRoots: string[] = [],
+): Promise<string | undefined> {
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
   if (!home) {
     console.warn("[getSessionCwd] HOME not set, cannot locate session");
@@ -672,7 +693,7 @@ export async function getSessionCwd(sessionId: string): Promise<string | undefin
   }
   const projectsDir = `${home}/.claude/projects`;
 
-  // Step 1: find the encoded project dir containing this session
+  // Step 1: find the encoded project dir containing this session file
   let encodedDir: string | undefined;
   try {
     for await (const entry of Deno.readDir(projectsDir)) {
@@ -687,45 +708,52 @@ export async function getSessionCwd(sessionId: string): Promise<string | undefin
 
   if (!encodedDir) return undefined;
 
-  // Step 2: decode the encoded dir name back to a real filesystem path.
-  // Encoding: / → -, /. (hidden dir) → --
-  // Split on -- to get segments; first segment is the base path, rest are hidden-dir suffixes.
-  const parts = encodedDir.split("--");
-  const basePath = parts[0].replace(/-/g, "/");
+  // Step 2: collect candidate real paths to test
+  const candidates = new Set<string>();
 
-  if (parts.length === 1) {
-    // No hidden dir suffix — base path is the cwd
-    return (await dirExists(basePath)) ? basePath : undefined;
+  // Add explicitly provided roots
+  for (const root of candidateRoots) {
+    if (root) candidates.add(root);
   }
 
-  // Step 3: for paths with hidden dirs (e.g. .claude/worktrees/...), use git worktree list
-  // to find the real path, since directory names may contain hyphens that clash with encoding.
-  const suffix = parts.slice(1).join("--"); // e.g. "claude-worktrees-sockmark-enforcer"
-  try {
-    const cmd = new Deno.Command("git", {
-      args: ["-C", basePath, "worktree", "list", "--porcelain"],
-      stdout: "piped", stderr: "piped",
-    });
-    const output = await cmd.output();
-    if (output.code === 0) {
-      const lines = new TextDecoder().decode(output.stdout).split("\n");
-      for (const line of lines) {
-        if (!line.startsWith("worktree ")) continue;
-        const wt = line.slice(9);
-        // Encode the relative path from basePath and compare to suffix
-        const rel = wt.startsWith(basePath) ? wt.slice(basePath.length).replace(/^\//, "") : null;
-        if (!rel) continue;
-        // Encode: leading . segments use --, rest use -
-        const encoded = rel.replace(/\/\./g, "--").replace(/\//g, "-").replace(/^\./,  "");
-        if (encoded === suffix) return wt;
+  // For each root, add its git worktrees
+  for (const root of candidateRoots) {
+    if (!root) continue;
+    try {
+      const cmd = new Deno.Command("git", {
+        args: ["-C", root, "worktree", "list", "--porcelain"],
+        stdout: "piped", stderr: "piped",
+      });
+      const out = await cmd.output();
+      if (out.code === 0) {
+        for (const line of new TextDecoder().decode(out.stdout).split("\n")) {
+          if (line.startsWith("worktree ")) candidates.add(line.slice(9));
+        }
       }
-    }
-  } catch { /* git not available or not a repo */ }
+    } catch { /* not a git repo or git unavailable */ }
+  }
 
-  // Step 4: fallback — try a naive decode (works when no hyphens in dir names)
-  const naiveSuffix = suffix.replace(/-/g, "/");
-  const naivePath = `${basePath}/.${naiveSuffix}`;
-  if (await dirExists(naivePath)) return naivePath;
+  // Also add history.jsonl project paths as candidates (cheap and covers non-worktree sessions)
+  try {
+    const raw = await Deno.readTextFile(`${home}/.claude/history.jsonl`);
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e.sessionId === sessionId && typeof e.project === "string" && e.project) {
+          candidates.add(e.project);
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* history missing */ }
+
+  // Step 3: forward-encode each candidate and compare to encodedDir
+  for (const candidate of candidates) {
+    if (encodePathForProjects(candidate) === encodedDir) {
+      // Validate it still exists on disk (worktree may have been deleted)
+      if (await dirExists(candidate)) return candidate;
+    }
+  }
 
   return undefined;
 }
