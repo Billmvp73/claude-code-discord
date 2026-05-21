@@ -1,5 +1,5 @@
 import { query as claudeQuery, type SDKMessage, type AgentDefinition as SDKAgentDefinition, type ModelInfo as SDKModelInfo, type SdkBeta, type McpServerConfig, type HookEvent, type HookCallbackMatcher } from "@anthropic-ai/claude-agent-sdk";
-import { setActiveQuery, trackMessageId, clearTrackedMessages } from "./query-manager.ts";
+import { setActiveQuery, clearActiveQueryIf, trackMessageId, clearTrackedMessages } from "./query-manager.ts";
 import type { AskUserQuestionInput, AskUserCallback } from "./user-question.ts";
 import type { PermissionRequestCallback } from "./permission-request.ts";
 import * as path from "https://deno.land/std@0.208.0/path/mod.ts";
@@ -208,6 +208,9 @@ export async function sendToClaudeCode(
 
   // Wrap with comprehensive error handling
   const executeWithErrorHandling = async (overrideModel?: string) => {
+    // Hoisted so the catch block can use clearActiveQueryIf for ownership-safe cleanup.
+    // deno-lint-ignore no-explicit-any
+    let iterator: any;
     try {
       // Determine which model to use.
       // On Bedrock, always resolve to a full model ID — bare aliases like "haiku"
@@ -350,7 +353,7 @@ export async function sendToClaudeCode(
         console.log(`Session resuming with ID: ${cleanedSessionId}`);
       }
       
-      const iterator = claudeQuery(queryOptions);
+      iterator = claudeQuery(queryOptions);
       // Store query reference for mid-session controls (interrupt, rewind, info)
       setActiveQuery(iterator);
       clearTrackedMessages();
@@ -406,9 +409,9 @@ export async function sendToClaudeCode(
         }
       }
       
-      // Clear active query when done
-      setActiveQuery(null);
-      
+      // Clear active query only if this run still owns it (prevents stale runs clearing newer ones).
+      clearActiveQueryIf(iterator);
+
       return {
         messages: currentMessages,
         response: currentResponse,
@@ -418,8 +421,8 @@ export async function sendToClaudeCode(
       };
     // deno-lint-ignore no-explicit-any
     } catch (error: any) {
-      // Clear active query on error
-      setActiveQuery(null);
+      // Clear active query on error, ownership-safe: only clear if still our iterator.
+      if (iterator) clearActiveQueryIf(iterator); else setActiveQuery(null);
       // Properly handle process exit code 143 (SIGTERM) and AbortError
       if (error.name === 'AbortError' || 
           controller.signal.aborted || 
