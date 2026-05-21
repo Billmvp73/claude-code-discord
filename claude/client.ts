@@ -208,6 +208,12 @@ export async function sendToClaudeCode(
 
   // Wrap with comprehensive error handling
   const executeWithErrorHandling = async (overrideModel?: string) => {
+    // Bail early if this run was already canceled before we reach SDK calls.
+    // Prevents a stale run from publishing itself as the active query after a newer run has started.
+    if (controller.signal.aborted) {
+      return { messages: [], response: "", sessionId: undefined, aborted: true, modelUsed: "Default" };
+    }
+
     // Hoisted so the catch block can use clearActiveQueryIf for ownership-safe cleanup.
     // deno-lint-ignore no-explicit-any
     let iterator: any;
