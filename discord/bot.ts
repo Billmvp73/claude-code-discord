@@ -256,6 +256,9 @@ export async function createDiscordBot(
         const ch = interaction.channel ?? client.channels.cache.get(interaction.channelId ?? '');
         return ch?.isThread() ? (ch as any).parentId ?? undefined : undefined;
       },
+      getChannel() {
+        return (interaction.channel ?? client.channels.cache.get(interaction.channelId ?? '') ?? null) as any;
+      },
     };
   }
 

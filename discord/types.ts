@@ -55,6 +55,8 @@ export interface InteractionContext {
   isThread(): boolean;
   /** Returns the parent channel ID if this interaction is in a thread; undefined otherwise */
   getParentChannelId(): string | undefined;
+  /** Returns the Discord channel/thread object the interaction was sent in, for creating bound senders */
+  getChannel(): import("npm:discord.js@14.14.1").TextBasedChannel | null;
 }
 
 export interface BotConfig {

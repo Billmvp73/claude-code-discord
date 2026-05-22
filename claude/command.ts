@@ -178,9 +178,14 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       const activeSessionId = resolvedFromName?.sessionId ?? explicitSessionId ?? deps.getSessionForChannel(channelId);
 
-      // Pick the right sender — if this channel has a thread, use it
+      // Pick the right sender:
+      // 1) Session has a dedicated thread → use that thread's sender
+      // 2) No dedicated thread → bind to invoking channel UNLESS the session came from an
+      //    explicit cross-channel user-supplied ID with a thread lookup error (fail closed
+      //    in that case to avoid leaking content from a foreign session into this channel).
       let activeSender = sendClaudeMessages;
       let sessionThreadChannelId: string | undefined;
+      let threadLookupError = false;
       if (activeSessionId && deps.sessionThreads) {
         try {
           const existing = await deps.sessionThreads.getThreadSender(activeSessionId);
@@ -188,7 +193,15 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             activeSender = existing.sender;
             sessionThreadChannelId = existing.threadChannelId;
           }
-        } catch { /* fallback to main sender */ }
+        } catch { threadLookupError = true; }
+      }
+      // Bind to invoking channel when no dedicated thread found, EXCEPT when:
+      // - an explicit session_id was supplied by the user AND the thread lookup errored
+      //   (could be a foreign session — fail closed to avoid cross-channel leakage)
+      const isExplicitForeignSession = !!explicitSessionId && threadLookupError;
+      if (!isExplicitForeignSession && activeSender === sendClaudeMessages && deps.createSenderForChannel) {
+        const ch = ctx.getChannel?.() ?? null;
+        if (ch) activeSender = deps.createSenderForChannel(ch);
       }
 
       const isResuming = !!activeSessionId;
@@ -452,7 +465,8 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       await ctx.deferReply();
 
-      // Check if the most recent session has a thread — if so, reuse it
+      // Check if the most recent session has a thread — if so, reuse it;
+      // otherwise bind to the invoking channel so output doesn't go to main channel.
       let activeSender = sendClaudeMessages;
       let isReusingThread = false;
       let sessionThreadChannelId: string | undefined;
@@ -472,6 +486,9 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           }
         }
       }
+      // /resume continues the most recent global session — keep output on the main channel
+      // (where the session was originally running) to avoid leaking session content into
+      // unrelated channels. Unlike /claude, /resume has no channel-session binding.
 
       const embedData: { color: number; title: string; description: string; timestamp: boolean; fields?: Array<{ name: string; value: string; inline: boolean }> } = {
         color: 0xffff00,
