@@ -478,10 +478,9 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           }
         }
       }
-      if (activeSender === sendClaudeMessages && deps.createSenderForChannel) {
-        const ch = ctx.getChannel?.() ?? null;
-        if (ch) activeSender = deps.createSenderForChannel(ch);
-      }
+      // /resume continues the most recent global session — keep output on the main channel
+      // (where the session was originally running) to avoid leaking session content into
+      // unrelated channels. Unlike /claude, /resume has no channel-session binding.
 
       const embedData: { color: number; title: string; description: string; timestamp: boolean; fields?: Array<{ name: string; value: string; inline: boolean }> } = {
         color: 0xffff00,
