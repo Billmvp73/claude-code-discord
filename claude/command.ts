@@ -178,7 +178,8 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       const activeSessionId = resolvedFromName?.sessionId ?? explicitSessionId ?? deps.getSessionForChannel(channelId);
 
-      // Pick the right sender — if this channel has a thread, use it
+      // Pick the right sender — if this channel has a thread, use it;
+      // otherwise bind to the invoking channel so output doesn't go to main channel.
       let activeSender = sendClaudeMessages;
       let sessionThreadChannelId: string | undefined;
       if (activeSessionId && deps.sessionThreads) {
@@ -188,7 +189,11 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             activeSender = existing.sender;
             sessionThreadChannelId = existing.threadChannelId;
           }
-        } catch { /* fallback to main sender */ }
+        } catch { /* fallback below */ }
+      }
+      if (activeSender === sendClaudeMessages && deps.createSenderForChannel) {
+        const ch = ctx.getChannel?.() ?? null;
+        if (ch) activeSender = deps.createSenderForChannel(ch);
       }
 
       const isResuming = !!activeSessionId;
@@ -452,7 +457,8 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       await ctx.deferReply();
 
-      // Check if the most recent session has a thread — if so, reuse it
+      // Check if the most recent session has a thread — if so, reuse it;
+      // otherwise bind to the invoking channel so output doesn't go to main channel.
       let activeSender = sendClaudeMessages;
       let isReusingThread = false;
       let sessionThreadChannelId: string | undefined;
@@ -471,6 +477,10 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             console.warn('[SessionThread] Could not reuse thread for continue, falling back:', err);
           }
         }
+      }
+      if (activeSender === sendClaudeMessages && deps.createSenderForChannel) {
+        const ch = ctx.interaction?.channel ?? null;
+        if (ch) activeSender = deps.createSenderForChannel(ch);
       }
 
       const embedData: { color: number; title: string; description: string; timestamp: boolean; fields?: Array<{ name: string; value: string; inline: boolean }> } = {
