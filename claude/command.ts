@@ -479,7 +479,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         }
       }
       if (activeSender === sendClaudeMessages && deps.createSenderForChannel) {
-        const ch = ctx.interaction?.channel ?? null;
+        const ch = ctx.getChannel?.() ?? null;
         if (ch) activeSender = deps.createSenderForChannel(ch);
       }
 
