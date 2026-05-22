@@ -60,7 +60,7 @@ export const claudeCommands = [
         .setRequired(true))
     .addStringOption(option =>
       option.setName('session_id')
-        .setDescription('Session ID to resume (optional)')
+        .setDescription('Session ID or session name to resume (e.g. "sockmark" or full UUID)')
         .setRequired(false)),
 
   new SlashCommandBuilder()
