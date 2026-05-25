@@ -798,8 +798,7 @@ export async function getSessionModel(sessionId: string): Promise<SessionInfo | 
         await Deno.stat(filePath);
         const raw = await Deno.readTextFile(filePath);
         let lastModel: string | undefined;
-        let peakTokens = 0;
-        let peakModel: string | undefined;
+        const tokensByModel = new Map<string, number>();
         for (const line of raw.split("\n")) {
           if (!line.trim()) continue;
           try {
@@ -808,20 +807,19 @@ export async function getSessionModel(sessionId: string): Promise<SessionInfo | 
             if (typeof msg === "object" && msg?.role === "assistant") {
               if (typeof msg.model === "string" && msg.model) lastModel = msg.model;
               const u = msg.usage;
-              if (u) {
+              if (u && lastModel) {
                 const total = (u.input_tokens ?? 0) +
                               (u.cache_creation_input_tokens ?? 0) +
                               (u.cache_read_input_tokens ?? 0);
-                if (total > peakTokens) {
-                  peakTokens = total;
-                  peakModel = msg.model;
-                }
+                const prev = tokensByModel.get(lastModel) ?? 0;
+                if (total > prev) tokensByModel.set(lastModel, total);
               }
             }
           } catch { /* skip */ }
         }
         if (!lastModel) return undefined;
-        return { model: lastModel, used1MContext: peakTokens > STANDARD_CONTEXT_LIMIT && peakModel === lastModel };
+        const lastModelPeak = tokensByModel.get(lastModel) ?? 0;
+        return { model: lastModel, used1MContext: lastModelPeak > STANDARD_CONTEXT_LIMIT };
       } catch { /* not in this dir */ }
     }
   } catch { /* projects dir missing */ }

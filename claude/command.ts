@@ -613,6 +613,16 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       let result: ClaudeResponse | undefined;
       try {
         const cwd = deps.resolveCwdForChannel(channelId, (message.channel as any).parentId);
+        let freeFormQueryOpts = deps.getQueryOptions?.() ?? {};
+        if (existingSessionId) {
+          const sessionInfo = await getSessionModel(existingSessionId);
+          if (sessionInfo) {
+            freeFormQueryOpts = { ...freeFormQueryOpts, model: sessionInfo.model };
+            if (sessionInfo.used1MContext) {
+              freeFormQueryOpts = { ...freeFormQueryOpts, betas: ['context-1m-2025-08-07'] };
+            }
+          }
+        }
         result = await sendToClaudeCode(
           cwd,
           prompt,
@@ -624,7 +634,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             if (claudeMessages.length > 0) activeSender(claudeMessages).catch(() => {});
           },
           false,
-          deps.getQueryOptions?.()
+          freeFormQueryOpts
         );
       } catch (err) {
         console.error("[FreeForm] Claude run failed:", err);
