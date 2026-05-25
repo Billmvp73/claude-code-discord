@@ -772,6 +772,41 @@ async function dirExists(path: string): Promise<boolean> {
 }
 
 /**
+ * Read the model used in a session's most recent assistant turn from its .jsonl file.
+ * Returns e.g. "claude-opus-4-6" or undefined if not determinable.
+ */
+export async function getSessionModel(sessionId: string): Promise<string | undefined> {
+  if (!UUID_RE.test(sessionId)) return undefined;
+  const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
+  if (!home) return undefined;
+  const projectsDir = `${home}/.claude/projects`;
+  try {
+    for await (const projEntry of Deno.readDir(projectsDir)) {
+      if (!projEntry.isDirectory) continue;
+      const filePath = `${projectsDir}/${projEntry.name}/${sessionId}.jsonl`;
+      try {
+        await Deno.stat(filePath);
+        // Found the file — scan it for the most recent assistant message with a model
+        const raw = await Deno.readTextFile(filePath);
+        let lastModel: string | undefined;
+        for (const line of raw.split("\n")) {
+          if (!line.trim()) continue;
+          try {
+            const entry = JSON.parse(line);
+            const msg = entry.message;
+            if (typeof msg === "object" && msg?.role === "assistant" && typeof msg?.model === "string" && msg.model) {
+              lastModel = msg.model;
+            }
+          } catch { /* skip */ }
+        }
+        return lastModel;
+      } catch { /* not in this dir */ }
+    }
+  } catch { /* projects dir missing */ }
+  return undefined;
+}
+
+/**
  * Look up a session ID by its human-readable name.
  * Returns:
  *   { sessionId, cwd } — exactly one match found

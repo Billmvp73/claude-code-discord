@@ -4,7 +4,7 @@ import { convertToClaudeMessages } from "./message-converter.ts";
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
 import type { Message, TextBasedChannel } from "npm:discord.js@14.14.1";
 import { validateProjectPath } from "../project/validate.ts";
-import { getSessionCwd, resolveSessionByName } from "./enhanced-client.ts";
+import { getSessionCwd, resolveSessionByName, getSessionModel } from "./enhanced-client.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -229,6 +229,14 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       } else {
         cwd = resolvedChannelCwd;
       }
+      // When resuming, detect the model the session was using and apply it,
+      // so the conversation continues with the same model instead of the bot's current default.
+      let queryOpts = deps.getQueryOptions?.() ?? {};
+      if (activeSessionId) {
+        const sessionModel = await getSessionModel(activeSessionId);
+        if (sessionModel) queryOpts = { ...queryOpts, model: sessionModel };
+      }
+
       const result = await sendToClaudeCode(
         cwd,
         prompt,
@@ -242,7 +250,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           }
         },
         false,
-        deps.getQueryOptions?.()
+        queryOpts
       );
 
       // Guard all state writes behind ownership — stale aborted runs must not stomp.
