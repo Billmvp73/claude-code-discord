@@ -771,11 +771,21 @@ async function dirExists(path: string): Promise<boolean> {
   }
 }
 
+export interface SessionInfo {
+  model: string;
+  /** True if peak context in this session exceeded 200K tokens, indicating 1M context was active */
+  used1MContext: boolean;
+}
+
+// Standard context limit; sessions peaking above this must have used the 1M beta
+const STANDARD_CONTEXT_LIMIT = 200_000;
+
 /**
- * Read the model used in a session's most recent assistant turn from its .jsonl file.
- * Returns e.g. "claude-opus-4-6" or undefined if not determinable.
+ * Read the model and context usage from a session's .jsonl file.
+ * Returns the last-used model and whether 1M context was active (inferred from
+ * peak token counts — if input + cache ever exceeded 200K, 1M beta was in use).
  */
-export async function getSessionModel(sessionId: string): Promise<string | undefined> {
+export async function getSessionModel(sessionId: string): Promise<SessionInfo | undefined> {
   if (!UUID_RE.test(sessionId)) return undefined;
   const home = Deno.env.get("HOME") || Deno.env.get("USERPROFILE") || "";
   if (!home) return undefined;
@@ -786,20 +796,28 @@ export async function getSessionModel(sessionId: string): Promise<string | undef
       const filePath = `${projectsDir}/${projEntry.name}/${sessionId}.jsonl`;
       try {
         await Deno.stat(filePath);
-        // Found the file — scan it for the most recent assistant message with a model
         const raw = await Deno.readTextFile(filePath);
         let lastModel: string | undefined;
+        let peakTokens = 0;
         for (const line of raw.split("\n")) {
           if (!line.trim()) continue;
           try {
             const entry = JSON.parse(line);
             const msg = entry.message;
-            if (typeof msg === "object" && msg?.role === "assistant" && typeof msg?.model === "string" && msg.model) {
-              lastModel = msg.model;
+            if (typeof msg === "object" && msg?.role === "assistant") {
+              if (typeof msg.model === "string" && msg.model) lastModel = msg.model;
+              const u = msg.usage;
+              if (u) {
+                const total = (u.input_tokens ?? 0) +
+                              (u.cache_creation_input_tokens ?? 0) +
+                              (u.cache_read_input_tokens ?? 0);
+                if (total > peakTokens) peakTokens = total;
+              }
             }
           } catch { /* skip */ }
         }
-        return lastModel;
+        if (!lastModel) return undefined;
+        return { model: lastModel, used1MContext: peakTokens > STANDARD_CONTEXT_LIMIT };
       } catch { /* not in this dir */ }
     }
   } catch { /* projects dir missing */ }

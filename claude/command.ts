@@ -231,12 +231,17 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       } else {
         cwd = resolvedChannelCwd;
       }
-      // When resuming, detect the model the session was using and apply it,
-      // so the conversation continues with the same model instead of the bot's current default.
+      // When resuming, detect the model and context settings the session was using.
+      // If the session used >200K tokens it must have had the 1M context beta active — re-enable it.
       let queryOpts = deps.getQueryOptions?.() ?? {};
       if (activeSessionId) {
-        const sessionModel = await getSessionModel(activeSessionId);
-        if (sessionModel) queryOpts = { ...queryOpts, model: sessionModel };
+        const sessionInfo = await getSessionModel(activeSessionId);
+        if (sessionInfo) {
+          queryOpts = { ...queryOpts, model: sessionInfo.model };
+          if (sessionInfo.used1MContext) {
+            queryOpts = { ...queryOpts, betas: ['context-1m-2025-08-07'] };
+          }
+        }
       }
 
       // Register the invoking channel so AskUser/permission prompts route there instead of main.
