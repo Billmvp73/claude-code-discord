@@ -551,7 +551,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         const sessionInfo = await getSessionModel(currentSessionId);
         if (sessionInfo) {
           if (!isBedrock) resumeQueryOpts = { ...resumeQueryOpts, model: sessionInfo.model };
-          if (sessionInfo.used1MContext) {
+          if (sessionInfo.used1MContext && !isBedrock) {
             resumeQueryOpts = { ...resumeQueryOpts, betas: ['context-1m-2025-08-07'] };
           }
         }
@@ -623,7 +623,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           const sessionInfo = await getSessionModel(existingSessionId);
           if (sessionInfo) {
             if (!isBedrock) freeFormQueryOpts = { ...freeFormQueryOpts, model: sessionInfo.model };
-            if (sessionInfo.used1MContext) {
+            if (sessionInfo.used1MContext && !isBedrock) {
               freeFormQueryOpts = { ...freeFormQueryOpts, betas: ['context-1m-2025-08-07'] };
             }
           }
