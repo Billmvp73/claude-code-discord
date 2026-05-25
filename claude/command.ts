@@ -231,12 +231,20 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       } else {
         cwd = resolvedChannelCwd;
       }
-      // When resuming, detect the model the session was using and apply it,
-      // so the conversation continues with the same model instead of the bot's current default.
+      // When resuming, detect the model and context settings the session was using.
+      // If the session used >200K tokens it must have had the 1M context beta active — re-enable it.
+      // On Bedrock: the session JSONL stores transcript model names (e.g. "claude-opus-4-7") which are
+      // NOT valid Bedrock model IDs — skip model override on Bedrock to avoid breaking the resume.
+      const isBedrock = Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1";
       let queryOpts = deps.getQueryOptions?.() ?? {};
       if (activeSessionId) {
-        const sessionModel = await getSessionModel(activeSessionId);
-        if (sessionModel) queryOpts = { ...queryOpts, model: sessionModel };
+        const sessionInfo = await getSessionModel(activeSessionId);
+        if (sessionInfo) {
+          if (!isBedrock) queryOpts = { ...queryOpts, model: sessionInfo.model };
+          if (sessionInfo.used1MContext && !isBedrock) {
+            queryOpts = { ...queryOpts, betas: ['context-1m-2025-08-07'] };
+          }
+        }
       }
 
       // Register the invoking channel so AskUser/permission prompts route there instead of main.
@@ -537,6 +545,17 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // If we have a specific session ID, use resume (not continueMode) so the SDK
       // explicitly seeks that session rather than inferring from cwd.
       const useResume = !!currentSessionId;
+      const isBedrock = Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1";
+      let resumeQueryOpts = deps.getQueryOptions?.() ?? {};
+      if (currentSessionId) {
+        const sessionInfo = await getSessionModel(currentSessionId);
+        if (sessionInfo) {
+          if (!isBedrock) resumeQueryOpts = { ...resumeQueryOpts, model: sessionInfo.model };
+          if (sessionInfo.used1MContext && !isBedrock) {
+            resumeQueryOpts = { ...resumeQueryOpts, betas: ['context-1m-2025-08-07'] };
+          }
+        }
+      }
       const result = await sendToClaudeCode(
         cwd,
         actualPrompt,
@@ -550,7 +569,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           }
         },
         !useResume, // continueMode only when no explicit session ID
-        deps.getQueryOptions?.()
+        resumeQueryOpts
       );
 
       const stillOwner = deps.getClaudeController() === controller;
@@ -598,6 +617,17 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       let result: ClaudeResponse | undefined;
       try {
         const cwd = deps.resolveCwdForChannel(channelId, (message.channel as any).parentId);
+        const isBedrock = Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1";
+        let freeFormQueryOpts = deps.getQueryOptions?.() ?? {};
+        if (existingSessionId) {
+          const sessionInfo = await getSessionModel(existingSessionId);
+          if (sessionInfo) {
+            if (!isBedrock) freeFormQueryOpts = { ...freeFormQueryOpts, model: sessionInfo.model };
+            if (sessionInfo.used1MContext && !isBedrock) {
+              freeFormQueryOpts = { ...freeFormQueryOpts, betas: ['context-1m-2025-08-07'] };
+            }
+          }
+        }
         result = await sendToClaudeCode(
           cwd,
           prompt,
@@ -609,7 +639,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
             if (claudeMessages.length > 0) activeSender(claudeMessages).catch(() => {});
           },
           false,
-          deps.getQueryOptions?.()
+          freeFormQueryOpts
         );
       } catch (err) {
         console.error("[FreeForm] Claude run failed:", err);
