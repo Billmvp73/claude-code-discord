@@ -241,7 +241,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         const sessionInfo = await getSessionModel(activeSessionId);
         if (sessionInfo) {
           if (!isBedrock) queryOpts = { ...queryOpts, model: sessionInfo.model };
-          if (sessionInfo.used1MContext) {
+          if (sessionInfo.used1MContext && !isBedrock) {
             queryOpts = { ...queryOpts, betas: ['context-1m-2025-08-07'] };
           }
         }
