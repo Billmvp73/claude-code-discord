@@ -233,11 +233,14 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       }
       // When resuming, detect the model and context settings the session was using.
       // If the session used >200K tokens it must have had the 1M context beta active — re-enable it.
+      // On Bedrock: the session JSONL stores transcript model names (e.g. "claude-opus-4-7") which are
+      // NOT valid Bedrock model IDs — skip model override on Bedrock to avoid breaking the resume.
+      const isBedrock = Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1";
       let queryOpts = deps.getQueryOptions?.() ?? {};
       if (activeSessionId) {
         const sessionInfo = await getSessionModel(activeSessionId);
         if (sessionInfo) {
-          queryOpts = { ...queryOpts, model: sessionInfo.model };
+          if (!isBedrock) queryOpts = { ...queryOpts, model: sessionInfo.model };
           if (sessionInfo.used1MContext) {
             queryOpts = { ...queryOpts, betas: ['context-1m-2025-08-07'] };
           }
@@ -542,11 +545,12 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // If we have a specific session ID, use resume (not continueMode) so the SDK
       // explicitly seeks that session rather than inferring from cwd.
       const useResume = !!currentSessionId;
+      const isBedrock = Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1";
       let resumeQueryOpts = deps.getQueryOptions?.() ?? {};
       if (currentSessionId) {
         const sessionInfo = await getSessionModel(currentSessionId);
         if (sessionInfo) {
-          resumeQueryOpts = { ...resumeQueryOpts, model: sessionInfo.model };
+          if (!isBedrock) resumeQueryOpts = { ...resumeQueryOpts, model: sessionInfo.model };
           if (sessionInfo.used1MContext) {
             resumeQueryOpts = { ...resumeQueryOpts, betas: ['context-1m-2025-08-07'] };
           }
@@ -613,11 +617,12 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       let result: ClaudeResponse | undefined;
       try {
         const cwd = deps.resolveCwdForChannel(channelId, (message.channel as any).parentId);
+        const isBedrock = Deno.env.get("CLAUDE_CODE_USE_BEDROCK") === "1";
         let freeFormQueryOpts = deps.getQueryOptions?.() ?? {};
         if (existingSessionId) {
           const sessionInfo = await getSessionModel(existingSessionId);
           if (sessionInfo) {
-            freeFormQueryOpts = { ...freeFormQueryOpts, model: sessionInfo.model };
+            if (!isBedrock) freeFormQueryOpts = { ...freeFormQueryOpts, model: sessionInfo.model };
             if (sessionInfo.used1MContext) {
               freeFormQueryOpts = { ...freeFormQueryOpts, betas: ['context-1m-2025-08-07'] };
             }
