@@ -188,6 +188,8 @@ export interface HandlerRegistryDeps {
   sessionThreads?: SessionThreadCallbacks;
   /** ProjectBindings singleton for channel→workDir resolution */
   bindings: ProjectBindings;
+  /** Set the active invoking channel so AskUser/permission prompts route there */
+  setActiveChannel?: (channel: import("npm:discord.js@14.14.1").TextBasedChannel | null) => void;
 }
 
 /**
@@ -564,6 +566,7 @@ export function createAllHandlers(
         if (ctrl === controller) pendingChannels.delete(id);
       }
     },
+    setActiveChannel: deps.setActiveChannel,
   });
 
   const gitHandlers = createGitHandlers({

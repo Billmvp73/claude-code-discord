@@ -126,6 +126,8 @@ export interface ClaudeHandlerDeps {
   isAnyChannelPending?: () => boolean;
   /** Clear all pending markers owned by this controller (used by cancel) */
   clearAllPending?: (controller: AbortController) => void;
+  /** Register the invoking channel as the active target for AskUser/permission routing */
+  setActiveChannel?: (channel: TextBasedChannel | null) => void;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
@@ -237,33 +239,42 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
         if (sessionModel) queryOpts = { ...queryOpts, model: sessionModel };
       }
 
-      const result = await sendToClaudeCode(
-        cwd,
-        prompt,
-        controller,
-        activeSessionId, // resume if present, new session if undefined
-        undefined,
-        (jsonData) => {
-          const claudeMessages = convertToClaudeMessages(jsonData);
-          if (claudeMessages.length > 0) {
-            activeSender(claudeMessages).catch(() => {});
-          }
-        },
-        false,
-        queryOpts
-      );
+      // Register the invoking channel so AskUser/permission prompts route there instead of main.
+      const invokedChannel = ctx.getChannel?.() ?? null;
+      deps.setActiveChannel?.(invokedChannel);
+
+      let result;
+      try {
+        result = await sendToClaudeCode(
+          cwd,
+          prompt,
+          controller,
+          activeSessionId, // resume if present, new session if undefined
+          undefined,
+          (jsonData) => {
+            const claudeMessages = convertToClaudeMessages(jsonData);
+            if (claudeMessages.length > 0) {
+              activeSender(claudeMessages).catch(() => {});
+            }
+          },
+          false,
+          queryOpts
+        );
+      } finally {
+        deps.setActiveChannel?.(null);
+      }
 
       // Guard all state writes behind ownership — stale aborted runs must not stomp.
       const stillOwner = deps.getClaudeController() === controller;
       if (stillOwner) {
         deps.setClaudeController(null);
-        if (result.sessionId) {
+        if (result?.sessionId) {
           deps.setSessionForChannel(channelId, result.sessionId);
           deps.setClaudeSessionId(result.sessionId);
         }
       }
 
-      return result;
+      return result ?? { response: '', sessionId: undefined };
     },
 
     /**

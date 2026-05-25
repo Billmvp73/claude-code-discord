@@ -76,6 +76,8 @@ export async function createClaudeCodeBot(config: BotConfig) {
   // Claude Code session management (closures needed for handler state)
   let claudeController: AbortController | null = null;
   let claudeSessionId: string | undefined;
+  // Active invoking channel for the current run — used to route AskUser/permission prompts
+  let activeRunChannel: TextBasedChannel | null = null;
 
   // Message history for navigation
   const messageHistoryOps: MessageHistoryOps = createMessageHistory(50);
@@ -274,6 +276,7 @@ export async function createClaudeCodeBot(config: BotConfig) {
       createSenderForChannel: (channel: TextBasedChannel) =>
         createClaudeSender(createChannelSenderAdapter(channel)),
       bindings: projectBindings,
+      setActiveChannel: (channel) => { activeRunChannel = channel; },
     },
     {
       getController: () => claudeController,
@@ -377,6 +380,8 @@ export async function createClaudeCodeBot(config: BotConfig) {
   // Helper: resolve the target channel for the currently active session.
   // If there's an active session thread, use that; otherwise fall back to main channel.
   const getActiveSessionChannel = () => {
+    // Prefer the channel the /claude command was invoked from (set during a run)
+    if (activeRunChannel) return activeRunChannel;
     // Try to find the thread for the current session
     if (claudeSessionId) {
       const thread = sessionThreadManager.getThread(claudeSessionId);
