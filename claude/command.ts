@@ -127,7 +127,7 @@ export interface ClaudeHandlerDeps {
   /** Clear all pending markers owned by this controller (used by cancel) */
   clearAllPending?: (controller: AbortController) => void;
   /** Register the invoking channel as the active target for AskUser/permission routing */
-  setActiveChannel?: (channel: TextBasedChannel | null) => void;
+  setActiveChannel?: (controller: AbortController | null, channel: TextBasedChannel | null) => void;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
@@ -241,7 +241,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
 
       // Register the invoking channel so AskUser/permission prompts route there instead of main.
       const invokedChannel = ctx.getChannel?.() ?? null;
-      deps.setActiveChannel?.(invokedChannel);
+      deps.setActiveChannel?.(controller, invokedChannel);
 
       let result;
       try {
@@ -261,7 +261,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           queryOpts
         );
       } finally {
-        deps.setActiveChannel?.(null);
+        deps.setActiveChannel?.(controller, null);
       }
 
       // Guard all state writes behind ownership — stale aborted runs must not stomp.

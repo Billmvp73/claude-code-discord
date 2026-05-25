@@ -189,7 +189,7 @@ export interface HandlerRegistryDeps {
   /** ProjectBindings singleton for channel→workDir resolution */
   bindings: ProjectBindings;
   /** Set the active invoking channel so AskUser/permission prompts route there */
-  setActiveChannel?: (channel: import("npm:discord.js@14.14.1").TextBasedChannel | null) => void;
+  setActiveChannel?: (controller: AbortController | null, channel: import("npm:discord.js@14.14.1").TextBasedChannel | null) => void;
 }
 
 /**
