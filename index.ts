@@ -278,7 +278,14 @@ export async function createClaudeCodeBot(config: BotConfig) {
       createSenderForChannel: (channel: TextBasedChannel) =>
         createClaudeSender(createChannelSenderAdapter(channel)),
       bindings: projectBindings,
-      setActiveChannel: (controller, channel) => { activeRunState = { controller, channel }; },
+      setActiveChannel: (controller, channel) => {
+        // Setting a channel: always register (this is the new run taking ownership).
+        // Clearing (channel === null): only clear if this controller still owns the state —
+        // a stale finally from a superseded run must not erase the newer run's channel.
+        if (channel !== null || activeRunState.controller === controller) {
+          activeRunState = { controller, channel };
+        }
+      },
     },
     {
       getController: () => claudeController,
