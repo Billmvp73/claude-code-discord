@@ -4,7 +4,7 @@ import { convertToClaudeMessages } from "./message-converter.ts";
 import { SlashCommandBuilder } from "npm:discord.js@14.14.1";
 import type { Message, TextBasedChannel } from "npm:discord.js@14.14.1";
 import { validateProjectPath } from "../project/validate.ts";
-import { getSessionCwd, resolveSessionByName } from "./enhanced-client.ts";
+import { getSessionCwd, resolveSessionByName, getSessionModel } from "./enhanced-client.ts";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -126,6 +126,8 @@ export interface ClaudeHandlerDeps {
   isAnyChannelPending?: () => boolean;
   /** Clear all pending markers owned by this controller (used by cancel) */
   clearAllPending?: (controller: AbortController) => void;
+  /** Register the invoking channel as the active target for AskUser/permission routing */
+  setActiveChannel?: (controller: AbortController | null, channel: TextBasedChannel | null) => void;
 }
 
 export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
@@ -229,33 +231,50 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       } else {
         cwd = resolvedChannelCwd;
       }
-      const result = await sendToClaudeCode(
-        cwd,
-        prompt,
-        controller,
-        activeSessionId, // resume if present, new session if undefined
-        undefined,
-        (jsonData) => {
-          const claudeMessages = convertToClaudeMessages(jsonData);
-          if (claudeMessages.length > 0) {
-            activeSender(claudeMessages).catch(() => {});
-          }
-        },
-        false,
-        deps.getQueryOptions?.()
-      );
+      // When resuming, detect the model the session was using and apply it,
+      // so the conversation continues with the same model instead of the bot's current default.
+      let queryOpts = deps.getQueryOptions?.() ?? {};
+      if (activeSessionId) {
+        const sessionModel = await getSessionModel(activeSessionId);
+        if (sessionModel) queryOpts = { ...queryOpts, model: sessionModel };
+      }
+
+      // Register the invoking channel so AskUser/permission prompts route there instead of main.
+      const invokedChannel = ctx.getChannel?.() ?? null;
+      deps.setActiveChannel?.(controller, invokedChannel);
+
+      let result;
+      try {
+        result = await sendToClaudeCode(
+          cwd,
+          prompt,
+          controller,
+          activeSessionId, // resume if present, new session if undefined
+          undefined,
+          (jsonData) => {
+            const claudeMessages = convertToClaudeMessages(jsonData);
+            if (claudeMessages.length > 0) {
+              activeSender(claudeMessages).catch(() => {});
+            }
+          },
+          false,
+          queryOpts
+        );
+      } finally {
+        deps.setActiveChannel?.(controller, null);
+      }
 
       // Guard all state writes behind ownership — stale aborted runs must not stomp.
       const stillOwner = deps.getClaudeController() === controller;
       if (stillOwner) {
         deps.setClaudeController(null);
-        if (result.sessionId) {
+        if (result?.sessionId) {
           deps.setSessionForChannel(channelId, result.sessionId);
           deps.setClaudeSessionId(result.sessionId);
         }
       }
 
-      return result;
+      return result ?? { response: '', sessionId: undefined };
     },
 
     /**
