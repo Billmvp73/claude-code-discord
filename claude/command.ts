@@ -542,6 +542,16 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
       // If we have a specific session ID, use resume (not continueMode) so the SDK
       // explicitly seeks that session rather than inferring from cwd.
       const useResume = !!currentSessionId;
+      let resumeQueryOpts = deps.getQueryOptions?.() ?? {};
+      if (currentSessionId) {
+        const sessionInfo = await getSessionModel(currentSessionId);
+        if (sessionInfo) {
+          resumeQueryOpts = { ...resumeQueryOpts, model: sessionInfo.model };
+          if (sessionInfo.used1MContext) {
+            resumeQueryOpts = { ...resumeQueryOpts, betas: ['context-1m-2025-08-07'] };
+          }
+        }
+      }
       const result = await sendToClaudeCode(
         cwd,
         actualPrompt,
@@ -555,7 +565,7 @@ export function createClaudeHandlers(deps: ClaudeHandlerDeps) {
           }
         },
         !useResume, // continueMode only when no explicit session ID
-        deps.getQueryOptions?.()
+        resumeQueryOpts
       );
 
       const stillOwner = deps.getClaudeController() === controller;

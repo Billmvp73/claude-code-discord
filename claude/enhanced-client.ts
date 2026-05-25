@@ -799,6 +799,7 @@ export async function getSessionModel(sessionId: string): Promise<SessionInfo | 
         const raw = await Deno.readTextFile(filePath);
         let lastModel: string | undefined;
         let peakTokens = 0;
+        let peakModel: string | undefined;
         for (const line of raw.split("\n")) {
           if (!line.trim()) continue;
           try {
@@ -811,13 +812,16 @@ export async function getSessionModel(sessionId: string): Promise<SessionInfo | 
                 const total = (u.input_tokens ?? 0) +
                               (u.cache_creation_input_tokens ?? 0) +
                               (u.cache_read_input_tokens ?? 0);
-                if (total > peakTokens) peakTokens = total;
+                if (total > peakTokens) {
+                  peakTokens = total;
+                  peakModel = msg.model;
+                }
               }
             }
           } catch { /* skip */ }
         }
         if (!lastModel) return undefined;
-        return { model: lastModel, used1MContext: peakTokens > STANDARD_CONTEXT_LIMIT };
+        return { model: lastModel, used1MContext: peakTokens > STANDARD_CONTEXT_LIMIT && peakModel === lastModel };
       } catch { /* not in this dir */ }
     }
   } catch { /* projects dir missing */ }
